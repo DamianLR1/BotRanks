@@ -173,4 +173,5 @@ client.on(Events.InteractionCreate, async (interaction) => {
 });
 
 // Iniciar el bot
-console.log("Token leido desde process.env:", process.env.DISCORD_TOKEN);
+console.log("Token:", process.env.DISCORD_TOKEN);
+
