@@ -173,4 +173,4 @@ client.on(Events.InteractionCreate, async (interaction) => {
 });
 
 // Iniciar el bot
-client.login(process.env.DISCORD_TOKEN);
+console.log("Token leido desde process.env:", process.env.DISCORD_TOKEN);
