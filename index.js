@@ -46,6 +46,10 @@ const client = new Client({
   partials: [Partials.Channel],
 });
 
+// 🌐 Variables de entorno
+const RANKING_CHANNEL_ID = process.env.RANKING_CHANNEL_ID;
+let rankingMessage = null;
+
 // 🛠️ Slash command
 const commands = [
   new SlashCommandBuilder()
@@ -69,7 +73,44 @@ client.once(Events.ClientReady, async () => {
   } catch (error) {
     console.error('❌ Error registrando el comando:', error);
   }
+
+  await postRankingMessage(); // Enviar ranking al arrancar
+  setInterval(postRankingMessage, 5 * 60 * 1000); // Actualizar cada 5 min
 });
+
+// 🏆 Mensaje de ranking automático
+const postRankingMessage = async () => {
+  const channel = await client.channels.fetch(RANKING_CHANNEL_ID);
+  if (!channel || !channel.isTextBased()) {
+    return console.error('❌ Canal de ranking no válido o no es de texto.');
+  }
+
+  pool.query(
+    'SELECT usuario, puntos FROM puntos WHERE guild = $1 ORDER BY puntos DESC LIMIT 10',
+    [process.env.GUILD_ID],
+    async (err, result) => {
+      if (err) return console.error('❌ Error al obtener el ranking:', err);
+      const rows = result.rows;
+      if (!rows.length) return;
+
+      const lines = rows.map((row, i) => `${i + 1}. **${row.usuario}** — ${row.puntos} puntos`);
+      const content = `🏆 **Ranking del Clan** (Top 10):\n\n${lines.join('\n')}`;
+
+      try {
+        if (!rankingMessage) {
+          rankingMessage = await channel.send(content);
+          await rankingMessage.pin();
+          console.log('📌 Mensaje de ranking enviado y fijado');
+        } else {
+          await rankingMessage.edit(content);
+          console.log('🔁 Ranking actualizado');
+        }
+      } catch (e) {
+        console.error('❌ Error al enviar/editar mensaje:', e);
+      }
+    }
+  );
+};
 
 // 📥 Mensajes de webhook con puntos
 client.on(Events.MessageCreate, (message) => {
