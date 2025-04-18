@@ -46,10 +46,6 @@ const client = new Client({
   partials: [Partials.Channel],
 });
 
-// 🌐 Variables de entorno
-const RANKING_CHANNEL_ID = process.env.RANKING_CHANNEL_ID;
-let rankingMessage = null;
-
 // 🛠️ Slash command
 const commands = [
   new SlashCommandBuilder()
@@ -57,6 +53,8 @@ const commands = [
     .setDescription('Muestra el ranking de los miembros con más puntos')
     .toJSON(),
 ];
+
+let rankingMessage = null;
 
 // 📦 Registrar comandos al iniciar
 client.once(Events.ClientReady, async () => {
@@ -74,43 +72,47 @@ client.once(Events.ClientReady, async () => {
     console.error('❌ Error registrando el comando:', error);
   }
 
-  await postRankingMessage(); // Enviar ranking al arrancar
-  setInterval(postRankingMessage, 5 * 60 * 1000); // Actualizar cada 5 min
-});
+  // 🔁 Enviar y actualizar el ranking automáticamente
+  const postRankingMessage = async () => {
+    try {
+      const channel = await client.channels.fetch(process.env.RANKING_CHANNEL_ID);
 
-// 🏆 Mensaje de ranking automático
-const postRankingMessage = async () => {
-  const channel = await client.channels.fetch(RANKING_CHANNEL_ID);
-  if (!channel || !channel.isTextBased()) {
-    return console.error('❌ Canal de ranking no válido o no es de texto.');
-  }
-
-  pool.query(
-    'SELECT usuario, puntos FROM puntos WHERE guild = $1 ORDER BY puntos DESC LIMIT 10',
-    [process.env.GUILD_ID],
-    async (err, result) => {
-      if (err) return console.error('❌ Error al obtener el ranking:', err);
-      const rows = result.rows;
-      if (!rows.length) return;
-
-      const lines = rows.map((row, i) => `${i + 1}. **${row.usuario}** — ${row.puntos} puntos`);
-      const content = `🏆 **Ranking del Clan** (Top 10):\n\n${lines.join('\n')}`;
-
-      try {
-        if (!rankingMessage) {
-          rankingMessage = await channel.send(content);
-          await rankingMessage.pin();
-          console.log('📌 Mensaje de ranking enviado y fijado');
-        } else {
-          await rankingMessage.edit(content);
-          console.log('🔁 Ranking actualizado');
-        }
-      } catch (e) {
-        console.error('❌ Error al enviar/editar mensaje:', e);
+      if (!rankingMessage) {
+        // Buscar mensaje fijado del bot
+        const pinned = await channel.messages.fetchPinned();
+        rankingMessage = pinned.find(m => m.author.id === client.user.id);
       }
+
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('refresh_ranking')
+          .setLabel('🔄 Actualizar ahora')
+          .setStyle(ButtonStyle.Secondary)
+      );
+
+      const result = await pool.query(
+        'SELECT usuario, puntos FROM puntos WHERE guild = $1 ORDER BY puntos DESC LIMIT 10',
+        [process.env.GUILD_ID]
+      );
+
+      const lines = result.rows.map((row, i) => `${i + 1}. **${row.usuario}** — ${row.puntos} puntos`);
+      const content = `🏆 **Ranking del Clan**\n\n${lines.join('\n') || 'No hay datos aún.'}`;
+
+      if (!rankingMessage) {
+        const msg = await channel.send({ content, components: [row] });
+        await msg.pin();
+        rankingMessage = msg;
+      } else {
+        await rankingMessage.edit({ content, components: [row] });
+      }
+    } catch (err) {
+      console.error('❌ Error en postRankingMessage:', err);
     }
-  );
-};
+  };
+
+  await postRankingMessage();
+  setInterval(postRankingMessage, 5 * 60 * 1000);
+});
 
 // 📥 Mensajes de webhook con puntos
 client.on(Events.MessageCreate, (message) => {
@@ -139,8 +141,23 @@ client.on(Events.MessageCreate, (message) => {
   }
 });
 
-// 🏆 /rankclan con paginación
+// 🏆 /rankclan con paginación y botón manual
 client.on(Events.InteractionCreate, async (interaction) => {
+  if (interaction.isButton() && interaction.customId === 'refresh_ranking') {
+    await interaction.deferReply({ ephemeral: true });
+    const result = await pool.query(
+      'SELECT usuario, puntos FROM puntos WHERE guild = $1 ORDER BY puntos DESC LIMIT 10',
+      [interaction.guild.id]
+    );
+
+    const lines = result.rows.map((row, i) => `${i + 1}. **${row.usuario}** — ${row.puntos} puntos`);
+    const content = `🏆 **Ranking del Clan**\n\n${lines.join('\n') || 'No hay datos aún.'}`;
+
+    if (rankingMessage) await rankingMessage.edit({ content });
+    await interaction.editReply({ content: '✅ Ranking actualizado.' });
+    return;
+  }
+
   if (!interaction.isChatInputCommand()) return;
   if (interaction.commandName !== 'rankclan') return;
 
@@ -190,7 +207,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           components: [row]
         };
 
-        if (interaction.replied) {
+        if (interaction.replied || interaction.deferred) {
           await interaction.editReply(replyContent);
         } else {
           await interaction.reply(replyContent);
