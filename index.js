@@ -1,177 +1,177 @@
-const { 
-  Client, 
-  GatewayIntentBits, 
-  Partials, 
-  Events, 
-  REST, 
-  Routes, 
-  SlashCommandBuilder, 
-  ActionRowBuilder, 
-  ButtonBuilder, 
-  ButtonStyle 
-} = require('discord.js');
-const sqlite3 = require('sqlite3').verbose();
+require('./server.js');
 require('dotenv').config();
+const { Client, GatewayIntentBits } = require('discord.js');
+const { SlashCommandBuilder } = require('@discordjs/builders');
+const { REST } = require('@discordjs/rest');
+const { Routes } = require('discord-api-types/v9');
+const { ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 
-// Cliente del bot
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
-  ],
-  partials: [Partials.Channel],
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
 });
 
-// Conectar a base de datos SQLite
-const db = new sqlite3.Database('./puntos.db');
-db.run(`CREATE TABLE IF NOT EXISTS puntos (
-  guild TEXT,
-  usuario TEXT,
-  puntos INTEGER DEFAULT 0,
-  UNIQUE(guild, usuario)
-)`);
+// Leer IDs desde el entorno
+const CHANNEL_IDS = process.env.CHANNEL_IDS.split(',');
+const GUILD_IDS = process.env.GUILD_IDS.split(',');
 
-// Definir comando slash
-const commands = [
-  new SlashCommandBuilder()
-    .setName('rankclan')
-    .setDescription('Muestra el ranking de los miembros con más puntos')
-    .toJSON(),
-];
+// Registrar comandos
+async function registrarComandos() {
+  if (!client.user) {
+    console.warn('⚠️ client.user no está listo aún');
+    return;
+  }
 
-// Registrar comandos slash en servidor específico
-client.once(Events.ClientReady, async () => {
-  console.log(`✅ Bot conectado como ${client.user.tag}`);
+  const commands = [
+    new SlashCommandBuilder()
+      .setName('sfhorario')
+      .setDescription('Muestra los horarios de reinicio de SF-1 y SF-2 en ambos reinicios'),
+    new SlashCommandBuilder()
+      .setName('schorario')
+      .setDescription('Muestra los horarios de reinicio de SC-1, SC-2, y SC-3 en ambos reinicios'),
+  ].map(cmd => cmd.toJSON());
 
-  const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
+  const rest = new REST({ version: '9' }).setToken(process.env.DISCORD_TOKEN);
 
   try {
-    await rest.put(
-      Routes.applicationGuildCommands(client.user.id, process.env.GUILD_ID),
-      { body: commands }
-    );
-    console.log('✅ Comando /rankclan registrado en el servidor');
+    console.log('🔄 Registrando comandos en servidores...');
+    for (const guildId of GUILD_IDS) {
+      await rest.put(
+        Routes.applicationGuildCommands(client.user.id, guildId),
+        { body: commands }
+      );
+      console.log(`✅ Comandos registrados en servidor ${guildId}`);
+    }
   } catch (error) {
-    console.error('❌ Error registrando el comando:', error);
+    console.error('❌ Error al registrar comandos:', error);
+  }
+}
+
+// Horarios en UTC
+const horariosPrimerReinicio = { 'sc-2': 18, 'sc-3': 9, 'sc-1': 6, 'sf-1': 6, 'sf-2': 15 };
+const horariosSegundoReinicio = { 'sc-2': 6, 'sf-2': 6 };
+
+function calcularTimestamp(horaUTC) {
+  const ahora = new Date();
+  const target = new Date(ahora);
+  target.setUTCHours(horaUTC, 0, 0, 0);
+  if (target < ahora) target.setUTCDate(target.getUTCDate() + 1);
+  return Math.floor(target.getTime() / 1000);
+}
+
+// Registro de mensajes por canal
+const mensajes = {};
+
+async function actualizarMensaje(channel) {
+  let content = '**Primer reinicio:**\n\n';
+
+  content += '**Survival custom:**\n';
+  content += `🟢 **SC-1**: <t:${calcularTimestamp(horariosPrimerReinicio['sc-1'])}:R>\n`;
+  content += `🟢 **SC-2**: <t:${calcularTimestamp(horariosPrimerReinicio['sc-2'])}:R>\n`;
+  content += `🟢 **SC-3**: <t:${calcularTimestamp(horariosPrimerReinicio['sc-3'])}:R>\n\n`;
+
+  content += '**Survival Fantasy:**\n';
+  content += `🟢 **SF-1**: <t:${calcularTimestamp(horariosPrimerReinicio['sf-1'])}:R>\n`;
+  content += `🟢 **SF-2**: <t:${calcularTimestamp(horariosPrimerReinicio['sf-2'])}:R>\n\n`;
+
+  content += '**Segundo reinicio:**\n\n';
+  content += '**Survival Custom:**\n';
+  content += `🟢 **SC-2**: <t:${calcularTimestamp(horariosSegundoReinicio['sc-2'])}:R>\n`;
+  content += '**Survival Fantasy:**\n';
+  content += `🟢 **SF-2**: <t:${calcularTimestamp(horariosSegundoReinicio['sf-2'])}:R>`;
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('refrescar_horario')
+      .setLabel('🔄 Refrescar')
+      .setStyle(ButtonStyle.Primary)
+  );
+
+  if (mensajes[channel.id]) {
+    try {
+      await mensajes[channel.id].edit({ content, components: [row] });
+    } catch (error) {
+      console.error(`❌ No se pudo editar el mensaje anterior en canal ${channel.id}:`, error.message);
+    }
+  } else {
+    const nuevoMensaje = await channel.send({ content, components: [row] });
+    await nuevoMensaje.pin();
+    mensajes[channel.id] = nuevoMensaje;
+  }
+}
+
+// Interacciones
+client.on('interactionCreate', async (interaction) => {
+  if (interaction.isButton()) {
+    if (interaction.customId === 'refrescar_horario') {
+      await interaction.deferUpdate();
+      const canal = interaction.channel;
+      await actualizarMensaje(canal);
+    }
+    return;
+  }
+
+  if (!interaction.isCommand()) return;
+  const { commandName } = interaction;
+
+  if (commandName === 'sfhorario') {
+    const horariosSF = {
+      'sf-1': { primerReinicio: calcularTimestamp(6) },
+      'sf-2': { primerReinicio: calcularTimestamp(15), segundoReinicio: calcularTimestamp(6) }
+    };
+
+    const mensajeSF = `
+**Horarios de reinicio de Survival Fantasy:**
+
+**🟢 SF-1:**
+- **Reinicio**: <t:${horariosSF['sf-1'].primerReinicio}:R>
+
+**🟢 SF-2:**
+- **Primer reinicio**: <t:${horariosSF['sf-2'].primerReinicio}:R>
+- **Segundo reinicio**: <t:${horariosSF['sf-2'].segundoReinicio}:R>
+    `;
+
+    await interaction.reply(mensajeSF);
+  }
+
+  if (commandName === 'schorario') {
+    const horariosSC = {
+      'sc-1': { primerReinicio: calcularTimestamp(6) },
+      'sc-2': { primerReinicio: calcularTimestamp(18), segundoReinicio: calcularTimestamp(6) },
+      'sc-3': { primerReinicio: calcularTimestamp(9) }
+    };
+
+    const mensajeSC = `
+**Horarios de reinicio de Survival Custom:**
+
+**🟢 SC-1:**
+- **Reinicio**: <t:${horariosSC['sc-1'].primerReinicio}:R>
+
+**🟢 SC-2:**
+- **Primer reinicio**: <t:${horariosSC['sc-2'].primerReinicio}:R>
+- **Segundo reinicio**: <t:${horariosSC['sc-2'].segundoReinicio}:R>
+
+**🟢 SC-3:**
+- **Reinicio**: <t:${horariosSC['sc-3'].primerReinicio}:R>
+    `;
+
+    await interaction.reply(mensajeSC);
   }
 });
 
-// Leer mensajes de webhook con embeds
-client.on(Events.MessageCreate, (message) => {
-  if (message.webhookId) {
-    console.log('📥 Mensaje de Webhook recibido:', message.content);
+// Al iniciar el bot
+client.once('ready', async () => {
+  console.log(`✅ Bot conectado como ${client.user.tag}`);
+  await registrarComandos();
 
-    if (message.embeds && message.embeds.length > 0) {
-      const embed = message.embeds[0];
-      const match = embed.description?.match(/\(([^)]+) ha conseguido (\d+) puntos[^)]*\)/si) ||
-                    embed.title?.match(/\(([^)]+) ha conseguido (\d+) puntos[^)]*\)/si);
-
-      if (match) {
-        const usuario = match[1].trim();
-        const puntos = parseInt(match[2]);
-        console.log(`✅ Detectado: ${usuario} ganó ${puntos} puntos`);
-
-        const guildId = message.guild?.id;
-        if (!guildId) {
-          console.warn('❌ No se pudo obtener el ID del servidor');
-          return;
-        }
-
-        db.run(`
-          INSERT INTO puntos (guild, usuario, puntos) VALUES (?, ?, ?)
-          ON CONFLICT(guild, usuario) DO UPDATE SET puntos = puntos + ?
-        `, [guildId, usuario, puntos, puntos], (err) => {
-          if (err) {
-            console.error('❌ Error al guardar en DB:', err);
-          } else {
-            console.log('🟢 Puntos guardados correctamente');
-          }
-        });
-      } else {
-        console.log('❌ No se encontró el patrón esperado en el embed del webhook');
-      }
-    } else {
-      console.log('❌ El mensaje del webhook no contiene embeds');
+  for (const channelId of CHANNEL_IDS) {
+    try {
+      const canal = await client.channels.fetch(channelId);
+      await actualizarMensaje(canal);
+      setInterval(() => actualizarMensaje(canal), 60 * 60 * 1000);
+    } catch (error) {
+      console.error(`❌ Error con canal ${channelId}:`, error.message);
     }
   }
 });
 
-// Comando /rankclan con paginación
-client.on(Events.InteractionCreate, async (interaction) => {
-  if (!interaction.isChatInputCommand()) return;
-  if (interaction.commandName !== 'rankclan') return;
-
-  const pageSize = 10;
-  let currentPage = 0;
-
-  const fetchAndDisplay = (page) => {
-    db.all('SELECT usuario, puntos FROM puntos ORDER BY puntos DESC', (err, rows) => {
-      if (err) {
-        console.error(err);
-        return interaction.reply({ content: '❌ Error al obtener el ranking.', ephemeral: true });
-      }
-
-      if (!rows.length) {
-        return interaction.reply({ content: '⚠️ No hay puntos registrados aún.', ephemeral: true });
-      }
-
-      const totalPages = Math.ceil(rows.length / pageSize);
-      const start = page * pageSize;
-      const end = start + pageSize;
-      const pageRows = rows.slice(start, end);
-
-      const lines = pageRows.map((row, i) => {
-        const rank = start + i + 1;
-        return `${rank}. **${row.usuario}** — ${row.puntos} puntos`;
-      });
-
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId('prev_page')
-          .setLabel('⬅️ Anterior')
-          .setStyle(ButtonStyle.Primary)
-          .setDisabled(page === 0),
-        new ButtonBuilder()
-          .setCustomId('next_page')
-          .setLabel('➡️ Siguiente')
-          .setStyle(ButtonStyle.Primary)
-          .setDisabled(page >= totalPages - 1)
-      );
-
-      if (interaction.replied) {
-        interaction.editReply({
-          content: `🏆 **Ranking del Clan** (Página ${page + 1}/${totalPages}):\n\n${lines.join('\n')}`,
-          components: [row]
-        });
-      } else {
-        interaction.reply({
-          content: `🏆 **Ranking del Clan** (Página ${page + 1}/${totalPages}):\n\n${lines.join('\n')}`,
-          components: [row]
-        });
-      }
-    });
-  };
-
-  fetchAndDisplay(currentPage);
-
-  const collector = interaction.channel.createMessageComponentCollector({
-    filter: i => ['prev_page', 'next_page'].includes(i.customId) && i.user.id === interaction.user.id,
-    time: 60_000 // 1 minuto
-  });
-
-  collector.on('collect', async i => {
-    if (i.customId === 'prev_page') currentPage--;
-    if (i.customId === 'next_page') currentPage++;
-    await i.deferUpdate();
-    fetchAndDisplay(currentPage);
-  });
-
-  collector.on('end', () => {
-    interaction.editReply({ components: [] }); // Quita los botones después del timeout
-  });
-});
-
-// Iniciar el bot
-console.log("Token:", process.env.DISCORD_TOKEN);
-
+client.login(process.env.DISCORD_TOKEN);
