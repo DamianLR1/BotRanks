@@ -8,7 +8,8 @@ const {
   SlashCommandBuilder,
   ActionRowBuilder,
   ButtonBuilder,
-  ButtonStyle
+  ButtonStyle,
+  EmbedBuilder
 } = require('discord.js');
 const { Pool } = require('pg');
 require('dotenv').config();
@@ -78,7 +79,6 @@ client.once(Events.ClientReady, async () => {
       const channel = await client.channels.fetch(process.env.RANKING_CHANNEL_ID);
 
       if (!rankingMessage) {
-        // Buscar mensaje fijado del bot
         const pinned = await channel.messages.fetchPinned();
         rankingMessage = pinned.find(m => m.author.id === client.user.id);
       }
@@ -96,14 +96,18 @@ client.once(Events.ClientReady, async () => {
       );
 
       const lines = result.rows.map((row, i) => `${i + 1}. **${row.usuario}** — ${row.puntos} puntos`);
-      const content = `🏆 **Ranking del Clan**\n\n${lines.join('\n') || 'No hay datos aún.'}`;
+      const embed = new EmbedBuilder()
+        .setTitle('🏆 Ranking del Clan')
+        .setDescription(lines.join('\n') || 'No hay datos aún.')
+        .setColor(0xFFD700)
+        .setTimestamp();
 
       if (!rankingMessage) {
-        const msg = await channel.send({ content, components: [row] });
+        const msg = await channel.send({ embeds: [embed], components: [row] });
         await msg.pin();
         rankingMessage = msg;
       } else {
-        await rankingMessage.edit({ content, components: [row] });
+        await rankingMessage.edit({ embeds: [embed], components: [row] });
       }
     } catch (err) {
       console.error('❌ Error en postRankingMessage:', err);
@@ -126,114 +130,4 @@ client.on(Events.MessageCreate, (message) => {
       const puntos = parseInt(match[2]);
       const guildId = message.guild?.id;
 
-      if (!guildId) return console.warn('❌ No se pudo obtener el ID del servidor');
-
-      pool.query(`
-        INSERT INTO puntos (guild, usuario, puntos)
-        VALUES ($1, $2, $3)
-        ON CONFLICT (guild, usuario)
-        DO UPDATE SET puntos = puntos.puntos + $3
-      `, [guildId, usuario, puntos], (err) => {
-        if (err) console.error('❌ Error al guardar en DB:', err);
-        else console.log(`🟢 ${usuario} ganó ${puntos} puntos`);
-      });
-    }
-  }
-});
-
-// 🏆 /rankclan con paginación y botón manual
-client.on(Events.InteractionCreate, async (interaction) => {
-  if (interaction.isButton() && interaction.customId === 'refresh_ranking') {
-    await interaction.deferReply({ ephemeral: true });
-    const result = await pool.query(
-      'SELECT usuario, puntos FROM puntos WHERE guild = $1 ORDER BY puntos DESC LIMIT 10',
-      [interaction.guild.id]
-    );
-
-    const lines = result.rows.map((row, i) => `${i + 1}. **${row.usuario}** — ${row.puntos} puntos`);
-    const content = `🏆 **Ranking del Clan**\n\n${lines.join('\n') || 'No hay datos aún.'}`;
-
-    if (rankingMessage) await rankingMessage.edit({ content });
-    await interaction.editReply({ content: '✅ Ranking actualizado.' });
-    return;
-  }
-
-  if (!interaction.isChatInputCommand()) return;
-  if (interaction.commandName !== 'rankclan') return;
-
-  const pageSize = 10;
-  let currentPage = 0;
-
-  const fetchAndDisplay = (page) => {
-    pool.query(
-      'SELECT usuario, puntos FROM puntos WHERE guild = $1 ORDER BY puntos DESC',
-      [interaction.guild.id],
-      async (err, result) => {
-        if (err) {
-          console.error(err);
-          return interaction.reply({ content: '❌ Error al obtener el ranking.', ephemeral: true });
-        }
-
-        const rows = result.rows;
-        if (!rows.length) {
-          return interaction.reply({ content: '⚠️ No hay puntos registrados aún.', ephemeral: true });
-        }
-
-        const totalPages = Math.ceil(rows.length / pageSize);
-        const start = page * pageSize;
-        const end = start + pageSize;
-        const pageRows = rows.slice(start, end);
-
-        const lines = pageRows.map((row, i) => {
-          const rank = start + i + 1;
-          return `${rank}. **${row.usuario}** — ${row.puntos} puntos`;
-        });
-
-        const row = new ActionRowBuilder().addComponents(
-          new ButtonBuilder()
-            .setCustomId('prev_page')
-            .setLabel('⬅️ Anterior')
-            .setStyle(ButtonStyle.Primary)
-            .setDisabled(page === 0),
-          new ButtonBuilder()
-            .setCustomId('next_page')
-            .setLabel('➡️ Siguiente')
-            .setStyle(ButtonStyle.Primary)
-            .setDisabled(page >= totalPages - 1)
-        );
-
-        const replyContent = {
-          content: `🏆 **Ranking del Clan** (Página ${page + 1}/${totalPages}):\n\n${lines.join('\n')}`,
-          components: [row]
-        };
-
-        if (interaction.replied || interaction.deferred) {
-          await interaction.editReply(replyContent);
-        } else {
-          await interaction.reply(replyContent);
-        }
-      }
-    );
-  };
-
-  fetchAndDisplay(currentPage);
-
-  const collector = interaction.channel.createMessageComponentCollector({
-    filter: i => ['prev_page', 'next_page'].includes(i.customId) && i.user.id === interaction.user.id,
-    time: 60_000
-  });
-
-  collector.on('collect', async i => {
-    if (i.customId === 'prev_page') currentPage--;
-    if (i.customId === 'next_page') currentPage++;
-    await i.deferUpdate();
-    fetchAndDisplay(currentPage);
-  });
-
-  collector.on('end', () => {
-    interaction.editReply({ components: [] });
-  });
-});
-
-// 🔑 Login del bot
-client.login(process.env.DISCORD_TOKEN);
+      if (!guildId) return console
