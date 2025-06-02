@@ -24,7 +24,6 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
-// Crear tabla si no existe
 pool.query(`
   CREATE TABLE IF NOT EXISTS puntos (
     guild TEXT,
@@ -37,7 +36,6 @@ pool.query(`
   else console.log('✅ Tabla "puntos" lista');
 });
 
-// 🤖 Cliente del bot
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -47,7 +45,6 @@ const client = new Client({
   partials: [Partials.Channel],
 });
 
-// 🛠️ Slash command
 const commands = [
   new SlashCommandBuilder()
     .setName('rankclan')
@@ -57,7 +54,6 @@ const commands = [
 
 let rankingMessage = null;
 
-// 📦 Registrar comandos al iniciar
 client.once(Events.ClientReady, async () => {
   console.log(`✅ Bot conectado como ${client.user.tag}`);
 
@@ -73,7 +69,6 @@ client.once(Events.ClientReady, async () => {
     console.error('❌ Error registrando el comando:', error);
   }
 
-  // 🔁 Enviar y actualizar el ranking automáticamente
   const postRankingMessage = async () => {
     try {
       const channel = await client.channels.fetch(process.env.RANKING_CHANNEL_ID);
@@ -83,24 +78,29 @@ client.once(Events.ClientReady, async () => {
         rankingMessage = pinned.find(m => m.author.id === client.user.id);
       }
 
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId('refresh_ranking')
-          .setLabel('🔄 Actualizar ahora')
-          .setStyle(ButtonStyle.Secondary)
-      );
-
       const result = await pool.query(
         'SELECT usuario, puntos FROM puntos WHERE guild = $1 ORDER BY puntos DESC LIMIT 10',
         [process.env.GUILD_ID]
       );
 
       const lines = result.rows.map((row, i) => `${i + 1}. **${row.usuario}** — ${row.puntos} puntos`);
+
       const embed = new EmbedBuilder()
         .setTitle('🏆 Ranking del Clan')
         .setDescription(lines.join('\n') || 'No hay datos aún.')
-        .setColor(0xFFD700)
+        .setColor('Gold')
         .setTimestamp();
+
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('refresh_ranking')
+          .setLabel('🔄 Actualizar ahora')
+          .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId('view_full_ranking')
+          .setLabel('➡️ Ver más')
+          .setStyle(ButtonStyle.Primary)
+      );
 
       if (!rankingMessage) {
         const msg = await channel.send({ embeds: [embed], components: [row] });
@@ -118,7 +118,6 @@ client.once(Events.ClientReady, async () => {
   setInterval(postRankingMessage, 5 * 60 * 1000);
 });
 
-// 📥 Mensajes de webhook con puntos
 client.on(Events.MessageCreate, (message) => {
   if (message.webhookId && message.embeds?.length > 0) {
     const embed = message.embeds[0];
@@ -145,25 +144,88 @@ client.on(Events.MessageCreate, (message) => {
   }
 });
 
-// 🏆 /rankclan con paginación y botón manual
 client.on(Events.InteractionCreate, async (interaction) => {
   if (interaction.isButton() && interaction.customId === 'refresh_ranking') {
     await interaction.deferReply({ ephemeral: true });
-
     const result = await pool.query(
       'SELECT usuario, puntos FROM puntos WHERE guild = $1 ORDER BY puntos DESC LIMIT 10',
       [interaction.guild.id]
     );
 
     const lines = result.rows.map((row, i) => `${i + 1}. **${row.usuario}** — ${row.puntos} puntos`);
+
     const embed = new EmbedBuilder()
       .setTitle('🏆 Ranking del Clan')
       .setDescription(lines.join('\n') || 'No hay datos aún.')
-      .setColor(0xFFD700)
+      .setColor('Gold')
       .setTimestamp();
 
     if (rankingMessage) await rankingMessage.edit({ embeds: [embed] });
     await interaction.editReply({ content: '✅ Ranking actualizado.' });
+    return;
+  }
+
+  if (interaction.isButton() && interaction.customId === 'view_full_ranking') {
+    await interaction.deferReply({ ephemeral: true });
+
+    const pageSize = 10;
+    let currentPage = 0;
+
+    const result = await pool.query(
+      'SELECT usuario, puntos FROM puntos WHERE guild = $1 ORDER BY puntos DESC',
+      [interaction.guild.id]
+    );
+
+    const rows = result.rows;
+    const totalPages = Math.ceil(rows.length / pageSize);
+
+    const displayPage = async (page) => {
+      const start = page * pageSize;
+      const end = start + pageSize;
+      const pageRows = rows.slice(start, end);
+
+      const lines = pageRows.map((row, i) => {
+        const rank = start + i + 1;
+        return `${rank}. **${row.usuario}** — ${row.puntos} puntos`;
+      });
+
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('prev_page_full')
+          .setLabel('⬅️ Anterior')
+          .setStyle(ButtonStyle.Secondary)
+          .setDisabled(page === 0),
+        new ButtonBuilder()
+          .setCustomId('next_page_full')
+          .setLabel('➡️ Siguiente')
+          .setStyle(ButtonStyle.Secondary)
+          .setDisabled(page >= totalPages - 1)
+      );
+
+      await interaction.editReply({
+        content: `🏆 **Ranking completo (Página ${page + 1}/${totalPages}):**\n\n${lines.join('\n')}`,
+        components: [row],
+      });
+    };
+
+    await displayPage(currentPage);
+
+    const collector = interaction.channel.createMessageComponentCollector({
+      filter: i => ['prev_page_full', 'next_page_full'].includes(i.customId) && i.user.id === interaction.user.id,
+      time: 60_000
+    });
+
+    collector.on('collect', async i => {
+      if (i.customId === 'prev_page_full') currentPage--;
+      if (i.customId === 'next_page_full') currentPage++;
+      await i.deferUpdate();
+      await displayPage(currentPage);
+    });
+
+    collector.on('end', () => {
+      interaction.editReply({ components: [] });
+    });
+
     return;
   }
 
@@ -198,13 +260,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
           return `${rank}. **${row.usuario}** — ${row.puntos} puntos`;
         });
 
-        const embed = new EmbedBuilder()
-          .setTitle('🏆 Ranking del Clan')
-          .setDescription(lines.join('\n'))
-          .setFooter({ text: `Página ${page + 1} de ${totalPages}` })
-          .setColor(0xFFD700)
-          .setTimestamp();
-
         const row = new ActionRowBuilder().addComponents(
           new ButtonBuilder()
             .setCustomId('prev_page')
@@ -219,7 +274,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         );
 
         const replyContent = {
-          embeds: [embed],
+          content: `🏆 **Ranking del Clan** (Página ${page + 1}/${totalPages}):\n\n${lines.join('\n')}`,
           components: [row]
         };
 
@@ -251,5 +306,4 @@ client.on(Events.InteractionCreate, async (interaction) => {
   });
 });
 
-// 🔑 Login del bot
 client.login(process.env.DISCORD_TOKEN);
