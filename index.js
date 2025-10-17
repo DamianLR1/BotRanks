@@ -66,7 +66,7 @@ async function buildRankingEmbed(guild) {
   const embed = new EmbedBuilder()
     .setTitle('🏆 Ranking del Clan')
     .setColor('Gold')
-    .setThumbnail(guild.iconURL()) // Añade el ícono del servidor
+    .setImage(guild.iconURL()) 
     .setTimestamp();
 
   if (resultUsuarios.rows.length === 0) {
