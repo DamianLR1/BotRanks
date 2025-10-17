@@ -9,7 +9,8 @@ const {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
-  EmbedBuilder
+  EmbedBuilder,
+  MessageFlags // <-- CORRECCIÓN: Añadido MessageFlags
 } = require('discord.js');
 const { Pool } = require('pg');
 require('dotenv').config();
@@ -185,8 +186,8 @@ client.on(Events.MessageCreate, (message) => {
       });
     }
 
-    // 2. Regex para el total del clan
-    const matchTotal = description.match(/ahora tiene ([0-9,.]+) puntos/si);
+    // 2. Regex para el total del clan (¡CORREGIDA!)
+    const matchTotal = description.match(/¡El clan LPCA ahora tiene ([0-9,.]+) puntos de experiencia!/si);
     if (matchTotal) {
       const totalPuntos = BigInt(matchTotal[1].replace(/[,.]/g, ''));
 
@@ -199,6 +200,9 @@ client.on(Events.MessageCreate, (message) => {
         if (err) console.error('❌ Error al guardar puntos totales:', err);
         else console.log(`🔵 Puntos totales del clan actualizados: ${totalPuntos}`);
       });
+    } else {
+      // Opcional: Avisa si la regex específica no encontró nada
+      console.warn('⚠️ No se encontró el total de puntos del clan en el webhook.');
     }
   }
 });
@@ -208,7 +212,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
   // Botón "Actualizar ahora"
   if (interaction.isButton() && interaction.customId === 'refresh_ranking') {
-    await interaction.deferReply({ ephemeral: true });
+    // CORRECCIÓN: Cambiado a 'flags' para evitar el warning
+    await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
 
     // Llamamos a la función 'buildRankingEmbed'
     const embed = await buildRankingEmbed(interaction.guild);
@@ -222,9 +227,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
     return;
   }
 
-  // Botón "Ver más" (con paginación SQL optimizada)
+  // Botón "Ver más"
   if (interaction.isButton() && interaction.customId === 'view_full_ranking') {
-    await interaction.deferReply({ ephemeral: true });
+    // CORRECCIÓN: Cambiado a 'flags' para evitar el warning
+    await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
 
     const pageSize = 10;
     let currentPage = 0;
@@ -290,7 +296,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     return;
   }
 
-  // Comando /rankclan (con paginación SQL optimizada)
+  // Comando /rankclan
   if (interaction.isChatInputCommand() && interaction.commandName === 'rankclan') {
     await interaction.deferReply(); // Defer público
     
