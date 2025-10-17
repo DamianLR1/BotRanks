@@ -24,18 +24,6 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
-pool.query(`
-  CREATE TABLE IF NOT EXISTS puntos (
-    guild TEXT,
-    usuario TEXT,
-    puntos INTEGER DEFAULT 0,
-    PRIMARY KEY (guild, usuario)
-  )
-`, (err) => {
-  if (err) console.error('❌ Error creando tabla:', err);
-  else console.log('✅ Tabla "puntos" lista');
-});
-
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -52,7 +40,105 @@ const commands = [
     .toJSON(),
 ];
 
-let rankingMessage = null;
+let rankingMessage = null; // Variable para almacenar el mensaje del ranking
+
+/**
+ * Construye el embed del ranking.
+ * Esta función consulta la base de datos para el top 10 y el total de puntos.
+ */
+async function buildRankingEmbed(guild) {
+  // 1. Obtener Top 10 Usuarios
+  const resultUsuarios = await pool.query(
+    'SELECT usuario, puntos FROM puntos WHERE guild = $1 ORDER BY puntos DESC LIMIT 10',
+    [guild.id]
+  );
+
+  // 2. Obtener Puntos Totales
+  const resultTotal = await pool.query(
+    'SELECT total_puntos FROM clan_stats WHERE guild = $1',
+    [guild.id]
+  );
+  
+  const totalPuntos = resultTotal.rows.length ? resultTotal.rows[0].total_puntos : '0';
+
+  // 3. Construir el Embed
+  const embed = new EmbedBuilder()
+    .setTitle('🏆 Ranking del Clan')
+    .setColor('Gold')
+    .setThumbnail(guild.iconURL()) // Añade el ícono del servidor
+    .setTimestamp();
+
+  if (resultUsuarios.rows.length === 0) {
+    embed.setDescription('No hay datos aún.');
+  } else {
+    const medallas = ['🥇', '🥈', '🥉'];
+
+    // Columna de Miembros
+    const miembros = resultUsuarios.rows.map((row, i) => {
+      const rank = medallas[i] || `**${i + 1}.**`;
+      return `${rank} **${row.usuario}**`;
+    }).join('\n');
+
+    // Columna de Puntos
+    const puntos = resultUsuarios.rows.map(row => 
+      `\`${row.puntos} pts\`` // Usar ` (backticks) alinea el texto
+    ).join('\n');
+
+    embed.addFields(
+      { name: 'Miembro', value: miembros, inline: true },
+      { name: 'Puntos', value: puntos, inline: true },
+      { 
+        name: 'Total del Clan', 
+        value: `**\`${BigInt(totalPuntos).toLocaleString('es')} pts\`**` 
+      }
+    );
+  }
+  
+  return embed;
+}
+
+/**
+ * Publica o actualiza el mensaje de ranking principal.
+ */
+const postRankingMessage = async () => {
+  try {
+    const channel = await client.channels.fetch(process.env.RANKING_CHANNEL_ID);
+    if (!channel) {
+      console.error(`❌ No se encontró el canal con ID ${process.env.RANKING_CHANNEL_ID}`);
+      return;
+    }
+
+    if (!rankingMessage) {
+      const pinned = await channel.messages.fetchPinned();
+      rankingMessage = pinned.find(m => m.author.id === client.user.id);
+    }
+
+    // Llamamos a la función 'buildRankingEmbed'
+    const embed = await buildRankingEmbed(channel.guild);
+
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('refresh_ranking')
+        .setLabel('🔄 Actualizar ahora')
+        .setStyle(ButtonStyle.Primary), // Azul, acción principal
+      new ButtonBuilder()
+        .setCustomId('view_full_ranking')
+        .setLabel('➡️ Ver más')
+        .setStyle(ButtonStyle.Secondary) // Gris, acción secundaria
+    );
+
+    if (!rankingMessage) {
+      const msg = await channel.send({ embeds: [embed], components: [row] });
+      await msg.pin();
+      rankingMessage = msg;
+    } else {
+      await rankingMessage.edit({ embeds: [embed], components: [row] });
+    }
+  } catch (err) {
+    console.error('❌ Error en postRankingMessage:', err);
+  }
+};
+
 
 client.once(Events.ClientReady, async () => {
   console.log(`✅ Bot conectado como ${client.user.tag}`);
@@ -69,51 +155,7 @@ client.once(Events.ClientReady, async () => {
     console.error('❌ Error registrando el comando:', error);
   }
 
-  const postRankingMessage = async () => {
-    try {
-      const channel = await client.channels.fetch(process.env.RANKING_CHANNEL_ID);
-
-      if (!rankingMessage) {
-        const pinned = await channel.messages.fetchPinned();
-        rankingMessage = pinned.find(m => m.author.id === client.user.id);
-      }
-
-      const result = await pool.query(
-        'SELECT usuario, puntos FROM puntos WHERE guild = $1 ORDER BY puntos DESC LIMIT 10',
-        [process.env.GUILD_ID]
-      );
-
-      const lines = result.rows.map((row, i) => `${i + 1}. **${row.usuario}** — ${row.puntos} puntos`);
-
-      const embed = new EmbedBuilder()
-        .setTitle('🏆 Ranking del Clan')
-        .setDescription(lines.join('\n') || 'No hay datos aún.')
-        .setColor('Gold')
-        .setTimestamp();
-
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId('refresh_ranking')
-          .setLabel('🔄 Actualizar ahora')
-          .setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder()
-          .setCustomId('view_full_ranking')
-          .setLabel('➡️ Ver más')
-          .setStyle(ButtonStyle.Primary)
-      );
-
-      if (!rankingMessage) {
-        const msg = await channel.send({ embeds: [embed], components: [row] });
-        await msg.pin();
-        rankingMessage = msg;
-      } else {
-        await rankingMessage.edit({ embeds: [embed], components: [row] });
-      }
-    } catch (err) {
-      console.error('❌ Error en postRankingMessage:', err);
-    }
-  };
-
+  // Publica el ranking al iniciar y luego cada 5 minutos
   await postRankingMessage();
   setInterval(postRankingMessage, 5 * 60 * 1000);
 });
@@ -121,15 +163,16 @@ client.once(Events.ClientReady, async () => {
 client.on(Events.MessageCreate, (message) => {
   if (message.webhookId && message.embeds?.length > 0) {
     const embed = message.embeds[0];
-    const match = embed.description?.match(/\(([^)]+) ha conseguido (\d+) puntos[^)]*\)/si)
-      || embed.title?.match(/\(([^)]+) ha conseguido (\d+) puntos[^)]*\)/si);
+    const description = embed.description || embed.title || '';
+    const guildId = message.guild?.id;
 
-    if (match) {
-      const usuario = match[1].trim();
-      const puntos = parseInt(match[2]);
-      const guildId = message.guild?.id;
+    if (!guildId) return console.warn('❌ No se pudo obtener el ID del servidor');
 
-      if (!guildId) return console.warn('❌ No se pudo obtener el ID del servidor');
+    // 1. Regex para el usuario
+    const matchUsuario = description.match(/\(([^)]+) ha conseguido (\d+) puntos[^)]*\)/si);
+    if (matchUsuario) {
+      const usuario = matchUsuario[1].trim();
+      const puntos = parseInt(matchUsuario[2]);
 
       pool.query(`
         INSERT INTO puntos (guild, usuario, puntos)
@@ -137,55 +180,73 @@ client.on(Events.MessageCreate, (message) => {
         ON CONFLICT (guild, usuario)
         DO UPDATE SET puntos = puntos.puntos + $3
       `, [guildId, usuario, puntos], (err) => {
-        if (err) console.error('❌ Error al guardar en DB:', err);
+        if (err) console.error('❌ Error al guardar puntos de usuario:', err);
         else console.log(`🟢 ${usuario} ganó ${puntos} puntos`);
+      });
+    }
+
+    // 2. Regex para el total del clan
+    const matchTotal = description.match(/ahora tiene ([0-9,.]+) puntos/si);
+    if (matchTotal) {
+      const totalPuntos = BigInt(matchTotal[1].replace(/[,.]/g, ''));
+
+      pool.query(`
+        INSERT INTO clan_stats (guild, total_puntos)
+        VALUES ($1, $2)
+        ON CONFLICT (guild)
+        DO UPDATE SET total_puntos = $2
+      `, [guildId, totalPuntos], (err) => {
+        if (err) console.error('❌ Error al guardar puntos totales:', err);
+        else console.log(`🔵 Puntos totales del clan actualizados: ${totalPuntos}`);
       });
     }
   }
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
+  if (!interaction.guild) return;
+
+  // Botón "Actualizar ahora"
   if (interaction.isButton() && interaction.customId === 'refresh_ranking') {
     await interaction.deferReply({ ephemeral: true });
-    const result = await pool.query(
-      'SELECT usuario, puntos FROM puntos WHERE guild = $1 ORDER BY puntos DESC LIMIT 10',
-      [interaction.guild.id]
-    );
 
-    const lines = result.rows.map((row, i) => `${i + 1}. **${row.usuario}** — ${row.puntos} puntos`);
+    // Llamamos a la función 'buildRankingEmbed'
+    const embed = await buildRankingEmbed(interaction.guild);
 
-    const embed = new EmbedBuilder()
-      .setTitle('🏆 Ranking del Clan')
-      .setDescription(lines.join('\n') || 'No hay datos aún.')
-      .setColor('Gold')
-      .setTimestamp();
-
-    if (rankingMessage) await rankingMessage.edit({ embeds: [embed] });
-    await interaction.editReply({ content: '✅ Ranking actualizado.' });
+    if (rankingMessage) {
+      await rankingMessage.edit({ embeds: [embed] });
+      await interaction.editReply({ content: '✅ Ranking actualizado.' });
+    } else {
+      await interaction.editReply({ content: '❌ No se pudo encontrar el mensaje de ranking.' });
+    }
     return;
   }
 
+  // Botón "Ver más" (con paginación SQL optimizada)
   if (interaction.isButton() && interaction.customId === 'view_full_ranking') {
     await interaction.deferReply({ ephemeral: true });
 
     const pageSize = 10;
     let currentPage = 0;
 
-    const result = await pool.query(
-      'SELECT usuario, puntos FROM puntos WHERE guild = $1 ORDER BY puntos DESC',
-      [interaction.guild.id]
-    );
-
-    const rows = result.rows;
-    const totalPages = Math.ceil(rows.length / pageSize);
+    // Consulta para el total de páginas
+    const totalResult = await pool.query('SELECT COUNT(*) FROM puntos WHERE guild = $1', [interaction.guild.id]);
+    const totalRows = parseInt(totalResult.rows[0].count);
+    const totalPages = Math.ceil(totalRows / pageSize) || 1;
 
     const displayPage = async (page) => {
-      const start = page * pageSize;
-      const end = start + pageSize;
-      const pageRows = rows.slice(start, end);
+      const offset = page * pageSize;
+
+      // Consulta SQL optimizada con LIMIT y OFFSET
+      const result = await pool.query(
+        'SELECT usuario, puntos FROM puntos WHERE guild = $1 ORDER BY puntos DESC LIMIT $2 OFFSET $3',
+        [interaction.guild.id, pageSize, offset]
+      );
+      
+      const pageRows = result.rows;
 
       const lines = pageRows.map((row, i) => {
-        const rank = start + i + 1;
+        const rank = offset + i + 1;
         return `${rank}. **${row.usuario}** — ${row.puntos} puntos`;
       });
 
@@ -203,7 +264,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       );
 
       await interaction.editReply({
-        content: `🏆 **Ranking completo (Página ${page + 1}/${totalPages}):**\n\n${lines.join('\n')}`,
+        content: `🏆 **Ranking completo (Página ${page + 1}/${totalPages}):**\n\n${lines.join('\n') || 'No hay datos aún.'}`,
         components: [row],
       });
     };
@@ -229,81 +290,117 @@ client.on(Events.InteractionCreate, async (interaction) => {
     return;
   }
 
-  if (!interaction.isChatInputCommand()) return;
-  if (interaction.commandName !== 'rankclan') return;
+  // Comando /rankclan (con paginación SQL optimizada)
+  if (interaction.isChatInputCommand() && interaction.commandName === 'rankclan') {
+    await interaction.deferReply(); // Defer público
+    
+    const pageSize = 10;
+    let currentPage = 0;
 
-  const pageSize = 10;
-  let currentPage = 0;
+    // Consulta para el total de páginas
+    const totalResult = await pool.query('SELECT COUNT(*) FROM puntos WHERE guild = $1', [interaction.guild.id]);
+    const totalRows = parseInt(totalResult.rows[0].count);
+    const totalPages = Math.ceil(totalRows / pageSize) || 1;
 
-  const fetchAndDisplay = (page) => {
-    pool.query(
-      'SELECT usuario, puntos FROM puntos WHERE guild = $1 ORDER BY puntos DESC',
-      [interaction.guild.id],
-      async (err, result) => {
-        if (err) {
-          console.error(err);
-          return interaction.reply({ content: '❌ Error al obtener el ranking.', ephemeral: true });
-        }
+    const fetchAndDisplay = async (page) => {
+      try {
+        const offset = page * pageSize;
+        
+        const result = await pool.query(
+          'SELECT usuario, puntos FROM puntos WHERE guild = $1 ORDER BY puntos DESC LIMIT $2 OFFSET $3',
+          [interaction.guild.id, pageSize, offset]
+        );
 
         const rows = result.rows;
         if (!rows.length) {
-          return interaction.reply({ content: '⚠️ No hay puntos registrados aún.', ephemeral: true });
+          return interaction.editReply({ content: '⚠️ No hay puntos registrados aún.' });
         }
 
-        const totalPages = Math.ceil(rows.length / pageSize);
-        const start = page * pageSize;
-        const end = start + pageSize;
-        const pageRows = rows.slice(start, end);
-
-        const lines = pageRows.map((row, i) => {
-          const rank = start + i + 1;
+        const lines = rows.map((row, i) => {
+          const rank = offset + i + 1;
           return `${rank}. **${row.usuario}** — ${row.puntos} puntos`;
         });
 
         const row = new ActionRowBuilder().addComponents(
           new ButtonBuilder()
-            .setCustomId('prev_page')
+            .setCustomId('prev_page_cmd')
             .setLabel('⬅️ Anterior')
             .setStyle(ButtonStyle.Primary)
             .setDisabled(page === 0),
           new ButtonBuilder()
-            .setCustomId('next_page')
+            .setCustomId('next_page_cmd')
             .setLabel('➡️ Siguiente')
             .setStyle(ButtonStyle.Primary)
             .setDisabled(page >= totalPages - 1)
         );
 
-        const replyContent = {
+        await interaction.editReply({
           content: `🏆 **Ranking del Clan** (Página ${page + 1}/${totalPages}):\n\n${lines.join('\n')}`,
           components: [row]
-        };
+        });
 
+      } catch (err) {
+        console.error(err);
         if (interaction.replied || interaction.deferred) {
-          await interaction.editReply(replyContent);
-        } else {
-          await interaction.reply(replyContent);
+          await interaction.editReply({ content: '❌ Error al obtener el ranking.', components: [] });
         }
       }
-    );
-  };
+    };
 
-  fetchAndDisplay(currentPage);
+    await fetchAndDisplay(currentPage);
 
-  const collector = interaction.channel.createMessageComponentCollector({
-    filter: i => ['prev_page', 'next_page'].includes(i.customId) && i.user.id === interaction.user.id,
-    time: 60_000
-  });
+    const collector = interaction.channel.createMessageComponentCollector({
+      filter: i => ['prev_page_cmd', 'next_page_cmd'].includes(i.customId) && i.user.id === interaction.user.id,
+      time: 60_000
+    });
 
-  collector.on('collect', async i => {
-    if (i.customId === 'prev_page') currentPage--;
-    if (i.customId === 'next_page') currentPage++;
-    await i.deferUpdate();
-    fetchAndDisplay(currentPage);
-  });
+    collector.on('collect', async i => {
+      if (i.customId === 'prev_page_cmd') currentPage--;
+      if (i.customId === 'next_page_cmd') currentPage++;
+      await i.deferUpdate();
+      await fetchAndDisplay(currentPage);
+    });
 
-  collector.on('end', () => {
-    interaction.editReply({ components: [] });
-  });
+    collector.on('end', () => {
+      interaction.editReply({ components: [] });
+    });
+  }
 });
 
-client.login(process.env.DISCORD_TOKEN);
+
+// --- INICIO DEL BOT ---
+// Usamos una función async auto-ejecutable para asegurar que las tablas
+// existan ANTES de que el bot se conecte.
+
+(async () => {
+  try {
+    console.log('Conectando a la base de datos...');
+    // 1. Crear tabla 'puntos'
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS puntos (
+        guild TEXT,
+        usuario TEXT,
+        puntos INTEGER DEFAULT 0,
+        PRIMARY KEY (guild, usuario)
+      )
+    `);
+    console.log('✅ Tabla "puntos" lista');
+
+    // 2. Crear tabla 'clan_stats'
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS clan_stats (
+        guild TEXT PRIMARY KEY,
+        total_puntos BIGINT DEFAULT 0
+      )
+    `);
+    console.log('✅ Tabla "clan_stats" lista');
+    
+    // 3. Si todo va bien, inicia el bot
+    console.log('Iniciando sesión en Discord...');
+    await client.login(process.env.DISCORD_TOKEN);
+
+  } catch (err) {
+    console.error('❌ Error fatal durante el inicio:', err);
+    process.exit(1); // Detiene el proceso si no se puede conectar a la DB
+  }
+})();
