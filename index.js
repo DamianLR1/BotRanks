@@ -187,7 +187,7 @@ client.on(Events.MessageCreate, (message) => {
     }
 
     // 2. Regex para el total del clan (¡CORREGIDA!)
-    const matchTotal = description.match(/¡El clan LPCA ahora tiene ([0-9,.]+) puntos de experiencia!/si);
+    const matchTotal = description.match(/ahora tiene\s+([0-9,.]+)\s+puntos de experiencia/si);
     if (matchTotal) {
       const totalPuntos = BigInt(matchTotal[1].replace(/[,.]/g, ''));
 
