@@ -96,8 +96,8 @@ async function buildRankingEmbed(guild) {
   
   // Encabezado
   let descriptionString = "```TEMPORADA DE CLANES 🎃 HALLOWEEN```\n\n"; // <-- AQUÍ ESTÁ EL \n EXTRA
-  descriptionString += "**=========== 🏆 Ranking del Clan ==============**\n\n";
-  descriptionString += "**---------Ranking de Miembros----------**\n\n";
+  descriptionString += "**=========== 🏆 Ranking del Clan ============**\n\n";
+  descriptionString += "**------------ Ranking de Miembros ------------**\n\n";
 
   if (resultUsuarios.rows.length === 0) {
     descriptionString += 'No hay datos aún.';
