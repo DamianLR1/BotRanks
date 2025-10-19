@@ -63,6 +63,8 @@ let rankingMessage = null; // Variable para almacenar el mensaje del ranking
  * Construye el embed del ranking.
  * Esta función consulta la base de datos para el top 10 y el total de puntos.
  */
+// REEMPLAZA TU FUNCIÓN 'buildRankingEmbed' ACTUAL POR ESTA:
+
 async function buildRankingEmbed(guild) {
   // 1. Obtener Top 10 Usuarios
   const resultUsuarios = await pool.query(
@@ -85,50 +87,47 @@ async function buildRankingEmbed(guild) {
 
   // 3. Construir el Embed
   const embed = new EmbedBuilder()
+    // --- ¡NUEVAS LÍNEAS! ---
+    .setAuthor({ name: 'TEMPORADA DE CLANES 🎃 HALLOWEEN' })
     .setTitle('🏆 Ranking del Clan')
-    .setColor('Gold') 
+    .setDescription('▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬') // Divisor estético
+    // --- FIN DE LÍNEAS NUEVAS ---
+    .setColor('#E67E22') // Un color naranja Halloween
     .setImage(guild.iconURL()) // Logo en la parte inferior
     .setTimestamp();
 
   if (resultUsuarios.rows.length === 0) {
-    embed.setDescription('No hay datos aún.');
+    embed.setDescription('No hay datos aún.'); // Sobrescribe el divisor si no hay datos
   } else {
     const medallas = ['🥇', '🥈', '🥉'];
 
-    // --- MEJORA VISUAL: Ranking con Barras de Progreso ---
     const rankingLines = resultUsuarios.rows.map((row, i) => {
       const rank = medallas[i] || `**${i + 1}.**`;
       const nombre = `**${row.usuario}**`;
       const puntos = `\`${row.puntos} pts\``;
-      
-      // Creamos la barra de progreso
       const bar = createProgressBar(row.puntos, topPoints, 10);
       
-      // Usamos \n para un salto de línea y mejor formato
       return `${rank} ${nombre}\n   ${puntos} ${bar}`;
-    }).join('\n\n'); // Un \n extra para separar a cada miembro
+    }).join('\n\n'); 
 
-    // Añadimos el campo de ranking
     embed.addFields({
-      name: 'Ranking de Miembros',
+      name: 'Ranking de Miembros', // Este es el "---------Ranking de Miembros----------"
       value: rankingLines,
       inline: false
     });
 
-    // --- MEJORA VISUAL: ESPACIADOR ---
-    embed.addFields({ name: '\u200B', value: '\u200B', inline: false });
+    embed.addFields({ name: '\u200B', value: '\u200B', inline: false }); // Espaciador
 
-    // --- MEJORA VISUAL: COLUMNAS DE STATS ---
     embed.addFields(
       { 
         name: 'Total del Clan', 
         value: `**\`${BigInt(totalPuntos).toLocaleString('es')} pts\`**`,
-        inline: true // <-- Lado a lado en PC
+        inline: true
       },
       {
         name: 'Paquetes de tienda',
         value: `**\`${paquetesTienda}\`**`,
-        inline: true // <-- Lado a lado en PC
+        inline: true
       }
     );
   }
