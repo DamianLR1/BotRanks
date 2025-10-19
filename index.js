@@ -87,50 +87,50 @@ async function buildRankingEmbed(guild) {
 
   // 3. Construir el Embed
   const embed = new EmbedBuilder()
-    // --- ¡NUEVAS LÍNEAS! ---
-    .setAuthor({ name: 'TEMPORADA DE CLANES 🎃 HALLOWEEN' })
-    .setTitle('🏆 Ranking del Clan')
-    .setDescription('▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬') // Divisor estético
-    // --- FIN DE LÍNEAS NUEVAS ---
-    .setColor('#E67E22') // Un color naranja Halloween
+    .setColor('#E67E22') // Naranja Halloween
     .setImage(guild.iconURL()) // Logo en la parte inferior
     .setTimestamp();
 
+  // --- ¡AQUÍ ESTÁ LA MAGIA! ---
+  // Vamos a construir una sola descripción gigante
+  
+  // Encabezado
+  let descriptionString = "```TEMPORADA DE CLANES 🎃 HALLOWEEN```\n\n"; // <-- AQUÍ ESTÁ EL \n EXTRA
+  descriptionString += "**=========== 🏆 Ranking del Clan ==============**\n\n";
+  descriptionString += "**---------Ranking de Miembros----------**\n\n";
+
   if (resultUsuarios.rows.length === 0) {
-    embed.setDescription('No hay datos aún.'); // Sobrescribe el divisor si no hay datos
+    descriptionString += 'No hay datos aún.';
   } else {
     const medallas = ['🥇', '🥈', '🥉'];
 
+    // Ranking
     const rankingLines = resultUsuarios.rows.map((row, i) => {
       const rank = medallas[i] || `**${i + 1}.**`;
       const nombre = `**${row.usuario}**`;
-      const puntos = `\`${row.puntos} pts\``;
+      
+      // Quitamos los backticks (`) de los puntos para que coincida con tu ejemplo
+      const puntos = `${row.puntos} pts`; 
       const bar = createProgressBar(row.puntos, topPoints, 10);
       
-      return `${rank} ${nombre}\n   ${puntos} ${bar}`;
-    }).join('\n\n'); 
+      // Formato:
+      // 🥇 **GuillePC**
+      // 19900 pts [██████████]
+      return `${rank} ${nombre}\n${puntos} ${bar}`;
+    }).join('\n\n'); // Un \n extra para separar a cada miembro
 
-    embed.addFields({
-      name: 'Ranking de Miembros', // Este es el "---------Ranking de Miembros----------"
-      value: rankingLines,
-      inline: false
-    });
+    descriptionString += rankingLines;
+    
+    // Espaciador
+    descriptionString += "\n\n\u200B\n"; 
 
-    embed.addFields({ name: '\u200B', value: '\u200B', inline: false }); // Espaciador
-
-    embed.addFields(
-      { 
-        name: 'Total del Clan', 
-        value: `**\`${BigInt(totalPuntos).toLocaleString('es')} pts\`**`,
-        inline: true
-      },
-      {
-        name: 'Paquetes de tienda',
-        value: `**\`${paquetesTienda}\`**`,
-        inline: true
-      }
-    );
+    // Estadísticas (apiladas, ya que las columnas no son fiables en la descripción)
+    descriptionString += `**Total del Clan**\n\`${BigInt(totalPuntos).toLocaleString('es')} pts\`\n\n`;
+    descriptionString += `**Paquetes de tienda**\n\`${paquetesTienda}\``;
   }
+  
+  // Asignamos la cadena de texto gigante a la descripción
+  embed.setDescription(descriptionString);
   
   return embed;
 }
