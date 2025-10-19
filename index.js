@@ -87,34 +87,45 @@ async function buildRankingEmbed(guild) {
 
   // 3. Construir el Embed
   const embed = new EmbedBuilder()
-    // --- MEJORA ESTÉTICA: Encabezado limpio ---
+    // --- Encabezado limpio ---
     .setAuthor({ name: 'TEMPORADA DE CLANES 🎃 HALLOWEEN' })
-    .setTitle('🏆 Ranking del Clan')
+    .setTitle('➥ 🏆 Ranking del Clan')
+    
+    // --- ¡AQUÍ ESTÁ LA LÍNEA NUEVA! ---
+    // \u200B es un espacio invisible que crea una línea en blanco
+    .setDescription('\u200B') 
+    // ---
+    
     .setColor('#E67E22') // Naranja Halloween
     .setImage(guild.iconURL()) // Logo en la parte inferior
     .setTimestamp();
 
   if (resultUsuarios.rows.length === 0) {
-    embed.setDescription('No hay datos aún.');
+    embed.setDescription('No hay datos aún.'); // Esto sobrescribe el espacio si no hay datos
   } else {
-    // --- MEJORA ESTÉTICA: Ranking en la Descripción ---
-    // Mantenemos la lista en la descripción para compatibilidad móvil
+    // --- MEJORA VISUAL: Ranking con Barras de Progreso ---
     const medallas = ['🥇', '🥈', '🥉'];
     const rankingLines = resultUsuarios.rows.map((row, i) => {
       const rank = medallas[i] || `**${i + 1}.**`;
       const nombre = `**${row.usuario}**`;
-      const puntos = `${row.puntos} pts`; // Sin backticks aquí
+      const puntos = `\`${row.puntos} pts\``;
       const bar = createProgressBar(row.puntos, topPoints, 10);
       
-      return `${rank} ${nombre}\n${puntos} ${bar}`;
+      return `${rank} ${nombre}\n   ${puntos} ${bar}`;
     }).join('\n\n'); 
 
-    embed.setDescription(rankingLines);
-    
-    // --- MEJORA ESTÉTICA: Estadísticas en Fields ---
-    // Esto restaura el formato de columnas en PC y los backticks (`)
+    // Añadimos el campo de ranking (esto va DEBAJO de la descripción en blanco)
+    embed.addFields({
+      name: '➥ Ranking de Miembros',
+      value: rankingLines,
+      inline: false
+    });
+
+    // --- MEJORA VISUAL: ESPACIADOR ---
+    embed.addFields({ name: '\u200B', value: '\u200B', inline: false });
+
+    // --- MEJORA VISUAL: COLUMNAS DE STATS ---
     embed.addFields(
-      { name: '\u200B', value: '\u200B', inline: false }, // Espaciador
       { 
         name: 'Total del Clan', 
         value: `**\`${BigInt(totalPuntos).toLocaleString('es')} pts\`**`,
