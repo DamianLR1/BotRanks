@@ -54,19 +54,22 @@ async function buildRankingEmbed(guild) {
     [guild.id]
   );
 
-  // 2. Obtener Puntos Totales
-  const resultTotal = await pool.query(
-    'SELECT total_puntos FROM clan_stats WHERE guild = $1',
+  // 2. Obtener Puntos Totales Y Paquetes
+  const resultStats = await pool.query(
+    'SELECT total_puntos, paquetes_tienda FROM clan_stats WHERE guild = $1',
     [guild.id]
   );
   
-  const totalPuntos = resultTotal.rows.length ? resultTotal.rows[0].total_puntos : '0';
+  // Usamos valores por defecto si la tabla está vacía
+  const stats = resultStats.rows[0] || { total_puntos: '0', paquetes_tienda: 0 };
+  const totalPuntos = stats.total_puntos;
+  const paquetesTienda = stats.paquetes_tienda;
 
   // 3. Construir el Embed
   const embed = new EmbedBuilder()
     .setTitle('🏆 Ranking del Clan')
     .setColor('Gold')
-    .setImage(guild.iconURL()) 
+    .setImage(guild.iconURL()) // Logo en la parte inferior
     .setTimestamp();
 
   if (resultUsuarios.rows.length === 0) {
@@ -74,25 +77,35 @@ async function buildRankingEmbed(guild) {
   } else {
     const medallas = ['🥇', '🥈', '🥉'];
 
-    // Columna de Miembros
-    const miembros = resultUsuarios.rows.map((row, i) => {
+    // --- CORRECCIÓN PARA MÓVILES ---
+    // Unimos el ranking en un solo string
+    const rankingLines = resultUsuarios.rows.map((row, i) => {
       const rank = medallas[i] || `**${i + 1}.**`;
-      return `${rank} **${row.usuario}**`;
+      const nombre = `**${row.usuario}**`;
+      const puntos = `\`${row.puntos} pts\``;
+      return `${rank} ${nombre} — ${puntos}`;
     }).join('\n');
 
-    // Columna de Puntos
-    const puntos = resultUsuarios.rows.map(row => 
-      `\`${row.puntos} pts\`` // Usar ` (backticks) alinea el texto
-    ).join('\n');
+    // Añadimos el campo de ranking
+    embed.addFields({
+      name: 'Ranking de Miembros',
+      value: rankingLines,
+      inline: false
+    });
 
-    embed.addFields(
-      { name: 'Miembro', value: miembros, inline: true },
-      { name: 'Puntos', value: puntos, inline: true },
-      { 
-        name: 'Total del Clan', 
-        value: `**\`${BigInt(totalPuntos).toLocaleString('es')} pts\`**` 
-      }
-    );
+    // Añadimos el total
+    embed.addFields({ 
+      name: 'Total del Clan', 
+      value: `**\`${BigInt(totalPuntos).toLocaleString('es')} pts\`**`,
+      inline: false
+    });
+    
+    // ¡NUEVO CAMPO PARA LA TIENDA!
+    embed.addFields({
+      name: 'Paquetes de tienda:',
+      value: `**\`${paquetesTienda}\`**`,
+      inline: false 
+    });
   }
   
   return embed;
@@ -169,7 +182,7 @@ client.on(Events.MessageCreate, (message) => {
 
     if (!guildId) return console.warn('❌ No se pudo obtener el ID del servidor');
 
-    // 1. Regex para el usuario
+    // 1. Regex para el usuario (Esta no cambia)
     const matchUsuario = description.match(/\(([^)]+) ha conseguido (\d+) puntos[^)]*\)/si);
     if (matchUsuario) {
       const usuario = matchUsuario[1].trim();
@@ -186,23 +199,47 @@ client.on(Events.MessageCreate, (message) => {
       });
     }
 
-    // 2. Regex para el total del clan (¡CORREGIDA!)
-    const matchTotal = description.match(/ahora tiene\s+([0-9,.]+)\s+puntos de experiencia/si);
-    if (matchTotal) {
-      const totalPuntos = BigInt(matchTotal[1].replace(/[,.]/g, ''));
+    // --- LÓGICA DE PUNTOS TOTALES Y TIENDA (MODIFICADA) ---
+    
+    // 2. Regex para "Tienda de Almas" (La más específica DEBE ir primero)
+    const matchTienda = description.match(/¡El clan LPCA ahora tiene\s+([0-9,.]+)\s+puntos de experiencia!\s+Tienda de Almas/si);
 
+    if (matchTienda) {
+      const totalPuntos = BigInt(matchTienda[1].replace(/[,.]/g, ''));
+      console.log(`📦 ¡Paquete de tienda detectado! Actualizando total a ${totalPuntos}.`);
+
+      // Actualiza AMBOS: el total Y el contador de paquetes
       pool.query(`
-        INSERT INTO clan_stats (guild, total_puntos)
-        VALUES ($1, $2)
+        INSERT INTO clan_stats (guild, total_puntos, paquetes_tienda)
+        VALUES ($1, $2, 1)
         ON CONFLICT (guild)
-        DO UPDATE SET total_puntos = $2
+        DO UPDATE SET 
+          total_puntos = $2,
+          paquetes_tienda = clan_stats.paquetes_tienda + 1
       `, [guildId, totalPuntos], (err) => {
-        if (err) console.error('❌ Error al guardar puntos totales:', err);
-        else console.log(`🔵 Puntos totales del clan actualizados: ${totalPuntos}`);
+        if (err) console.error('❌ Error al guardar stats (tienda):', err);
       });
+
     } else {
-      // Opcional: Avisa si la regex específica no encontró nada
-      console.warn('⚠️ No se encontró el total de puntos del clan en el webhook.');
+      // 3. Regex genérica (Solo se ejecuta si la de la tienda no coincidió)
+      const matchTotal = description.match(/ahora tiene\s+([0-9,.]+)\s+puntos de experiencia/si);
+      
+      if (matchTotal) {
+        const totalPuntos = BigInt(matchTotal[1].replace(/[,.]/g, ''));
+        console.log(`🔵 Puntos totales (Genérico) actualizados: ${totalPuntos}`);
+
+        // Actualiza SÓLO el total
+        pool.query(`
+          INSERT INTO clan_stats (guild, total_puntos)
+          VALUES ($1, $2)
+          ON CONFLICT (guild)
+          DO UPDATE SET total_puntos = $2
+        `, [guildId, totalPuntos], (err) => {
+          if (err) console.error('❌ Error al guardar puntos totales (genérico):', err);
+        });
+      } else {
+        console.warn('⚠️ No se encontró el total de puntos del clan en el webhook.');
+      }
     }
   }
 });
@@ -381,6 +418,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 (async () => {
   try {
     console.log('Conectando a la base de datos...');
+    
     // 1. Crear tabla 'puntos'
     await pool.query(`
       CREATE TABLE IF NOT EXISTS puntos (
@@ -400,8 +438,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
       )
     `);
     console.log('✅ Tabla "clan_stats" lista');
+
+    // 3. AÑADIR LA NUEVA COLUMNA
+    // Esto añade la columna 'paquetes_tienda' si no existe.
+    await pool.query(`
+      ALTER TABLE clan_stats
+      ADD COLUMN IF NOT EXISTS paquetes_tienda INTEGER DEFAULT 0
+    `);
+    console.log('✅ Columna "paquetes_tienda" asegurada');
     
-    // 3. Si todo va bien, inicia el bot
+    // 4. Si todo va bien, inicia el bot
     console.log('Iniciando sesión en Discord...');
     await client.login(process.env.DISCORD_TOKEN);
 
