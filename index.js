@@ -10,10 +10,26 @@ const {
   ButtonBuilder,
   ButtonStyle,
   EmbedBuilder,
-  MessageFlags // <-- CORRECCIÓN: Añadido MessageFlags
+  MessageFlags
 } = require('discord.js');
 const { Pool } = require('pg');
 require('dotenv').config();
+
+/**
+ * Crea una barra de progreso con emojis.
+ */
+function createProgressBar(value, maxValue, size = 10) {
+  if (value <= 0 || maxValue <= 0) {
+    return '`[          ]`'; // Barra vacía si no hay datos
+  }
+  const percentage = value / maxValue;
+  const progress = Math.round(size * percentage);
+  
+  const filled = '█';
+  const empty = '░';
+
+  return `\`[${filled.repeat(progress)}${empty.repeat(size - progress)}]\``;
+}
 
 // 🔌 PostgreSQL
 const pool = new Pool({
@@ -60,15 +76,17 @@ async function buildRankingEmbed(guild) {
     [guild.id]
   );
   
-  // Usamos valores por defecto si la tabla está vacía
   const stats = resultStats.rows[0] || { total_puntos: '0', paquetes_tienda: 0 };
   const totalPuntos = stats.total_puntos;
   const paquetesTienda = stats.paquetes_tienda;
 
+  // Obtenemos los puntos del top 1 para la barra de progreso
+  const topPoints = resultUsuarios.rows.length ? resultUsuarios.rows[0].puntos : 0;
+
   // 3. Construir el Embed
   const embed = new EmbedBuilder()
     .setTitle('🏆 Ranking del Clan')
-    .setColor('Gold')
+    .setColor('Gold') 
     .setImage(guild.iconURL()) // Logo en la parte inferior
     .setTimestamp();
 
@@ -77,14 +95,18 @@ async function buildRankingEmbed(guild) {
   } else {
     const medallas = ['🥇', '🥈', '🥉'];
 
-    // --- CORRECCIÓN PARA MÓVILES ---
-    // Unimos el ranking en un solo string
+    // --- MEJORA VISUAL: Ranking con Barras de Progreso ---
     const rankingLines = resultUsuarios.rows.map((row, i) => {
       const rank = medallas[i] || `**${i + 1}.**`;
       const nombre = `**${row.usuario}**`;
       const puntos = `\`${row.puntos} pts\``;
-      return `${rank} ${nombre} — ${puntos}`;
-    }).join('\n');
+      
+      // Creamos la barra de progreso
+      const bar = createProgressBar(row.puntos, topPoints, 10);
+      
+      // Usamos \n para un salto de línea y mejor formato
+      return `${rank} ${nombre}\n   ${puntos} ${bar}`;
+    }).join('\n\n'); // Un \n extra para separar a cada miembro
 
     // Añadimos el campo de ranking
     embed.addFields({
@@ -93,19 +115,22 @@ async function buildRankingEmbed(guild) {
       inline: false
     });
 
-    // Añadimos el total
-    embed.addFields({ 
-      name: 'Total del Clan', 
-      value: `**\`${BigInt(totalPuntos).toLocaleString('es')} pts\`**`,
-      inline: false
-    });
-    
-    // ¡NUEVO CAMPO PARA LA TIENDA!
-    embed.addFields({
-      name: 'Paquetes de tienda:',
-      value: `**\`${paquetesTienda}\`**`,
-      inline: false 
-    });
+    // --- MEJORA VISUAL: ESPACIADOR ---
+    embed.addFields({ name: '\u200B', value: '\u200B', inline: false });
+
+    // --- MEJORA VISUAL: COLUMNAS DE STATS ---
+    embed.addFields(
+      { 
+        name: 'Total del Clan', 
+        value: `**\`${BigInt(totalPuntos).toLocaleString('es')} pts\`**`,
+        inline: true // <-- Lado a lado en PC
+      },
+      {
+        name: 'Paquetes de tienda',
+        value: `**\`${paquetesTienda}\`**`,
+        inline: true // <-- Lado a lado en PC
+      }
+    );
   }
   
   return embed;
@@ -199,7 +224,7 @@ client.on(Events.MessageCreate, (message) => {
       });
     }
 
-    // --- LÓGICA DE PUNTOS TOTALES Y TIENDA (MODIFICADA) ---
+    // --- LÓGICA DE PUNTOS TOTALES Y TIENDA ---
     
     // 2. Regex para "Tienda de Almas" (La más específica DEBE ir primero)
     const matchTienda = description.match(/¡El clan LPCA ahora tiene\s+([0-9,.]+)\s+puntos de experiencia!\s+Tienda de Almas/si);
@@ -249,10 +274,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
   // Botón "Actualizar ahora"
   if (interaction.isButton() && interaction.customId === 'refresh_ranking') {
-    // CORRECCIÓN: Cambiado a 'flags' para evitar el warning
     await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
 
-    // Llamamos a la función 'buildRankingEmbed'
     const embed = await buildRankingEmbed(interaction.guild);
 
     if (rankingMessage) {
@@ -266,13 +289,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
   // Botón "Ver más"
   if (interaction.isButton() && interaction.customId === 'view_full_ranking') {
-    // CORRECCIÓN: Cambiado a 'flags' para evitar el warning
     await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
 
     const pageSize = 10;
     let currentPage = 0;
 
-    // Consulta para el total de páginas
     const totalResult = await pool.query('SELECT COUNT(*) FROM puntos WHERE guild = $1', [interaction.guild.id]);
     const totalRows = parseInt(totalResult.rows[0].count);
     const totalPages = Math.ceil(totalRows / pageSize) || 1;
@@ -280,7 +301,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const displayPage = async (page) => {
       const offset = page * pageSize;
 
-      // Consulta SQL optimizada con LIMIT y OFFSET
       const result = await pool.query(
         'SELECT usuario, puntos FROM puntos WHERE guild = $1 ORDER BY puntos DESC LIMIT $2 OFFSET $3',
         [interaction.guild.id, pageSize, offset]
@@ -335,12 +355,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
   // Comando /rankclan
   if (interaction.isChatInputCommand() && interaction.commandName === 'rankclan') {
-    await interaction.deferReply(); // Defer público
+    await interaction.deferReply(); 
     
     const pageSize = 10;
     let currentPage = 0;
 
-    // Consulta para el total de páginas
     const totalResult = await pool.query('SELECT COUNT(*) FROM puntos WHERE guild = $1', [interaction.guild.id]);
     const totalRows = parseInt(totalResult.rows[0].count);
     const totalPages = Math.ceil(totalRows / pageSize) || 1;
@@ -412,14 +431,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
 
 // --- INICIO DEL BOT ---
-// Usamos una función async auto-ejecutable para asegurar que las tablas
-// existan ANTES de que el bot se conecte.
-
 (async () => {
   try {
     console.log('Conectando a la base de datos...');
     
-    // 1. Crear tabla 'puntos'
     await pool.query(`
       CREATE TABLE IF NOT EXISTS puntos (
         guild TEXT,
@@ -430,7 +445,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
     `);
     console.log('✅ Tabla "puntos" lista');
 
-    // 2. Crear tabla 'clan_stats'
     await pool.query(`
       CREATE TABLE IF NOT EXISTS clan_stats (
         guild TEXT PRIMARY KEY,
@@ -439,20 +453,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
     `);
     console.log('✅ Tabla "clan_stats" lista');
 
-    // 3. AÑADIR LA NUEVA COLUMNA
-    // Esto añade la columna 'paquetes_tienda' si no existe.
     await pool.query(`
       ALTER TABLE clan_stats
       ADD COLUMN IF NOT EXISTS paquetes_tienda INTEGER DEFAULT 0
     `);
     console.log('✅ Columna "paquetes_tienda" asegurada');
     
-    // 4. Si todo va bien, inicia el bot
     console.log('Iniciando sesión en Discord...');
     await client.login(process.env.DISCORD_TOKEN);
 
   } catch (err) {
     console.error('❌ Error fatal durante el inicio:', err);
-    process.exit(1); // Detiene el proceso si no se puede conectar a la DB
+    process.exit(1); 
   }
 })();
