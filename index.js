@@ -87,50 +87,46 @@ async function buildRankingEmbed(guild) {
 
   // 3. Construir el Embed
   const embed = new EmbedBuilder()
+    // --- MEJORA ESTÉTICA: Encabezado limpio ---
+    .setAuthor({ name: 'TEMPORADA DE CLANES 🎃 HALLOWEEN' })
+    .setTitle('🏆 Ranking del Clan')
     .setColor('#E67E22') // Naranja Halloween
     .setImage(guild.iconURL()) // Logo en la parte inferior
     .setTimestamp();
 
-  // --- ¡AQUÍ ESTÁ LA MAGIA! ---
-  // Vamos a construir una sola descripción gigante
-  
-  // Encabezado
-  let descriptionString = "```TEMPORADA DE CLANES 🎃 HALLOWEEN```\n\n"; // <-- AQUÍ ESTÁ EL \n EXTRA
-  descriptionString += "**=========== 🏆 Ranking del Clan ============**\n\n";
-  descriptionString += "**------------ Ranking de Miembros ------------**\n\n";
-
   if (resultUsuarios.rows.length === 0) {
-    descriptionString += 'No hay datos aún.';
+    embed.setDescription('No hay datos aún.');
   } else {
+    // --- MEJORA ESTÉTICA: Ranking en la Descripción ---
+    // Mantenemos la lista en la descripción para compatibilidad móvil
     const medallas = ['🥇', '🥈', '🥉'];
-
-    // Ranking
     const rankingLines = resultUsuarios.rows.map((row, i) => {
       const rank = medallas[i] || `**${i + 1}.**`;
       const nombre = `**${row.usuario}**`;
-      
-      // Quitamos los backticks (`) de los puntos para que coincida con tu ejemplo
-      const puntos = `${row.puntos} pts`; 
+      const puntos = `${row.puntos} pts`; // Sin backticks aquí
       const bar = createProgressBar(row.puntos, topPoints, 10);
       
-      // Formato:
-      // 🥇 **GuillePC**
-      // 19900 pts [██████████]
       return `${rank} ${nombre}\n${puntos} ${bar}`;
-    }).join('\n\n'); // Un \n extra para separar a cada miembro
+    }).join('\n\n'); 
 
-    descriptionString += rankingLines;
+    embed.setDescription(rankingLines);
     
-    // Espaciador
-    descriptionString += "\n\n\u200B\n"; 
-
-    // Estadísticas (apiladas, ya que las columnas no son fiables en la descripción)
-    descriptionString += `**Total del Clan**\n\`${BigInt(totalPuntos).toLocaleString('es')} pts\`\n\n`;
-    descriptionString += `**Paquetes de tienda**\n\`${paquetesTienda}\``;
+    // --- MEJORA ESTÉTICA: Estadísticas en Fields ---
+    // Esto restaura el formato de columnas en PC y los backticks (`)
+    embed.addFields(
+      { name: '\u200B', value: '\u200B', inline: false }, // Espaciador
+      { 
+        name: 'Total del Clan', 
+        value: `**\`${BigInt(totalPuntos).toLocaleString('es')} pts\`**`,
+        inline: true 
+      },
+      {
+        name: 'Paquetes de tienda',
+        value: `**\`${paquetesTienda}\`**`,
+        inline: true
+      }
+    );
   }
-  
-  // Asignamos la cadena de texto gigante a la descripción
-  embed.setDescription(descriptionString);
   
   return embed;
 }
