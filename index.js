@@ -59,12 +59,7 @@ const commands = [
 
 let rankingMessage = null; // Variable para almacenar el mensaje del ranking
 
-/**
- * Construye el embed del ranking.
- * Esta función consulta la base de datos para el top 10 y el total de puntos.
- */
-// REEMPLAZA TU FUNCIÓN 'buildRankingEmbed' ACTUAL POR ESTA:
-
+// --- INICIO DE TU FUNCIÓN MODIFICADA ---
 async function buildRankingEmbed(guild) {
   // 1. Obtener Top 10 Usuarios
   const resultUsuarios = await pool.query(
@@ -89,7 +84,7 @@ async function buildRankingEmbed(guild) {
   const embed = new EmbedBuilder()
     // --- Encabezado limpio ---
     .setAuthor({ name: 'TEMPORADA DE CLANES 🎃 HALLOWEEN' })
-    .setTitle('➥ 🏆 Ranking del Clan')
+    .setTitle('➥ 🏆 Ranking del Clan') // Tu cambio
     
     // --- ¡AQUÍ ESTÁ LA LÍNEA NUEVA! ---
     // \u200B es un espacio invisible que crea una línea en blanco
@@ -111,13 +106,14 @@ async function buildRankingEmbed(guild) {
       const puntos = `\`${row.puntos} pts\``;
       const bar = createProgressBar(row.puntos, topPoints, 10);
       
+      // Tu cambio con sangría manual
       return `${rank} ${nombre}\n   ${puntos} ${bar}`;
     }).join('\n\n'); 
 
     // Añadimos el campo de ranking (esto va DEBAJO de la descripción en blanco)
     embed.addFields({
-      name: '➥ Ranking de Miembros',
-      value: rankingLines,
+      name: '➥ Ranking de Miembros', // Tu cambio
+      value: rankingLines, // Tu versión sin el espacio de línea
       inline: false
     });
 
@@ -141,6 +137,8 @@ async function buildRankingEmbed(guild) {
   
   return embed;
 }
+// --- FIN DE TU FUNCIÓN MODIFICADA ---
+
 
 /**
  * Publica o actualiza el mensaje de ranking principal.
