@@ -67,7 +67,7 @@ async function buildRankingEmbed(guild) {
     [guild.id]
   );
 
-  // 2. Obtener Puntos Totales Y Paquetes (DE VUELTA A clan_stats)
+  // 2. Obtener Puntos Totales Y Paquetes
   const resultStats = await pool.query(
     'SELECT total_puntos, paquetes_tienda FROM clan_stats WHERE guild = $1',
     [guild.id]
@@ -129,6 +129,7 @@ async function buildRankingEmbed(guild) {
 // --- FIN DE TU FUNCIÓN MODIFICADA ---
 
 
+// --- ¡NUEVA FUNCIÓN DE ESCANEO CON LÍMITES! ---
 /**
  * Escanea el historial del canal para contar los paquetes de tienda antiguos.
  * Esto solo se ejecuta una vez al iniciar el bot.
@@ -147,7 +148,13 @@ async function backfillStorePackages(channelId, guildId) {
     let messagesFetched = 0;
     const batchSize = 100;
 
-    console.log(`[HISTÓRICO] Buscando mensajes que contengan "Tienda de Almas"...`);
+    // --- ¡REGLAS DE LÍMITE! ---
+    const maxPackagesToFind = 115; // Límite de paquetes a encontrar
+    const maxStaleMessages = 500;   // Límite de mensajes revisados SIN encontrar nada
+    let messagesSinceLastFind = 0;  // Contador de inactividad
+    // ---
+
+    console.log(`[HISTÓRICO] Buscando mensajes (Max paquetes: ${maxPackagesToFind}, Parar si no encuentra en ${maxStaleMessages} mensajes)...`);
 
     while (true) {
       const options = { limit: batchSize };
@@ -157,29 +164,59 @@ async function backfillStorePackages(channelId, guildId) {
 
       const messages = await channel.messages.fetch(options);
       if (messages.size === 0) {
-        console.log(`[HISTÓRICO] No se encontraron más mensajes.`);
+        console.log(`[HISTÓRICO] No se encontraron más mensajes (fin del historial).`);
         break; 
       }
 
-      messages.forEach(message => {
+      let foundInThisBatch = false; // Bandera para esta tanda de 100 mensajes
+      
+      messages.every(message => { 
         if (message.webhookId && message.embeds?.length > 0) {
           const description = message.embeds[0].description || message.embeds[0].title || '';
           
           if (description.match(/Tienda de Almas/i)) { 
             totalCount++;
+            foundInThisBatch = true; // Marcamos que encontramos uno
           }
         }
+        
+        if (totalCount >= maxPackagesToFind) {
+          return false; // Detiene el bucle .every()
+        }
+        return true; // Continúa el bucle .every()
       });
       
       messagesFetched += messages.size;
       lastId = messages.last().id;
-      console.log(`[HISTÓRICO] ... ${messagesFetched} mensajes revisados, ${totalCount} paquetes encontrados hasta ahora...`);
+      console.log(`[HISTÓRICO] ... ${messagesFetched} mensajes revisados, ${totalCount} paquetes encontrados...`);
+
+      // --- REVISIÓN DE LÍMITES (BUCLE EXTERNO) ---
+
+      // 1. ¿Alcanzamos el máximo de paquetes?
+      if (totalCount >= maxPackagesToFind) {
+        console.log(`[HISTÓRICO] Límite de ${maxPackagesToFind} paquetes alcanzado. Deteniendo escaneo.`);
+        break; // Detiene el bucle while(true)
+      }
+
+      // 2. ¿Alcanzamos el límite de inactividad?
+      if (foundInThisBatch) {
+        messagesSinceLastFind = 0; // Reinicia el contador de inactividad
+      } else {
+        messagesSinceLastFind += messages.size; // Suma los mensajes de esta tanda
+      }
+      
+      if (messagesSinceLastFind >= maxStaleMessages) {
+        console.log(`[HISTÓRICO] No se encontraron paquetes en los últimos ${maxStaleMessages} mensajes. Deteniendo escaneo.`);
+        break; // Detiene el bucle while(true)
+      }
+      // ---
 
       await new Promise(resolve => setTimeout(resolve, 500)); 
     }
 
     console.log(`[HISTÓRICO] ✅ Escaneo completado. Total de paquetes encontrados: ${totalCount}`);
 
+    // ESTABLECEMOS el contador en la base de datos
     await pool.query(`
       INSERT INTO clan_stats (guild, paquetes_tienda)
       VALUES ($1, $2)
@@ -189,7 +226,8 @@ async function backfillStorePackages(channelId, guildId) {
 
     console.log(`[HISTÓRICO] ✅ Base de datos (clan_stats.paquetes_tienda) actualizada con el conteo histórico.`);
 
-  } catch (err) {
+  } catch (err)
+ {
     console.error(`[HISTÓRICO] ❌ Error durante el escaneo:`, err);
     if (err.code === 50013) { 
       console.error(`[HISTÓRICO] ❌ El bot no tiene permiso para leer el historial de mensajes en este canal.`);
@@ -203,7 +241,7 @@ async function backfillStorePackages(channelId, guildId) {
  */
 const postRankingMessage = async () => {
   try {
-    // Esta función sigue usando RANKING_CHANNEL_ID, ¡lo cual es correcto!
+    // Publica en el CANAL DE RANKING
     const channel = await client.channels.fetch(process.env.RANKING_CHANNEL_ID);
     if (!channel) {
       console.error(`❌ No se encontró el canal con ID ${process.env.RANKING_CHANNEL_ID}`);
@@ -256,19 +294,16 @@ client.once(Events.ClientReady, async () => {
     console.error('❌ Error registrando el comando:', error);
   }
 
-  // --- ¡CORRECCIÓN APLICADA! ---
-  // Ahora escanea el canal correcto usando tu variable CHANNER_ID
+  // Escanea el CANAL DEL WEBHOOK (usando tu variable CHANNER_ID)
   await backfillStorePackages(process.env.CHANNER_ID, process.env.GUILD_ID);
-  // ---
 
-  // Publica el ranking al iniciar y luego cada 5 minutos
+  // Publica el ranking en el CANAL DE RANKING
   await postRankingMessage();
   setInterval(postRankingMessage, 5 * 60 * 1000);
 });
 
 
-// --- ¡CORRECCIÓN APLICADA! ---
-// El bot ahora SOLO lee mensajes del canal de tu variable CHANNER_ID
+// Escucha nuevos mensajes SÓLO en el CANAL DEL WEBHOOK
 client.on(Events.MessageCreate, (message) => {
   if (message.channel.id === process.env.CHANNER_ID && message.webhookId && message.embeds?.length > 0) {
     const embed = message.embeds[0];
