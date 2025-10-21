@@ -140,6 +140,69 @@ async function buildRankingEmbed(guild) {
 // --- FIN DE TU FUNCIÓN MODIFICADA ---
 
 
+//
+// --- ¡NUEVA FUNCIÓN AÑADIDA! ---
+//
+/**
+ * Escanea el historial del canal para contar los paquetes de tienda antiguos.
+ * Esto solo se ejecuta una vez al iniciar el bot.
+ */
+async function backfillStorePackages(channelId, guildId) {
+  try {
+    console.log(`[HISTÓRICO] 🚀 Iniciando escaneo de 'Tienda de Almas' en el canal ${channelId}...`);
+    const channel = await client.channels.fetch(channelId);
+    if (!channel || !channel.messages) {
+      console.error(`[HISTÓRICO] ❌ No se pudo encontrar el canal o no se tienen permisos para leer mensajes.`);
+      return;
+    }
+
+    let totalCount = 0;
+    let lastId;
+    let messagesFetched = 0;
+
+    while (true) {
+      const options = { limit: 100 };
+      if (lastId) {
+        options.before = lastId;
+      }
+
+      const messages = await channel.messages.fetch(options);
+      if (messages.size === 0) {
+        break; // Terminamos de leer
+      }
+
+      messages.forEach(message => {
+        if (message.webhookId && message.embeds?.length > 0) {
+          const description = message.embeds[0].description || message.embeds[0].title || '';
+          if (description.match(/Tienda de Almas/si)) {
+            totalCount++;
+          }
+        }
+      });
+      
+      messagesFetched += messages.size;
+      lastId = messages.last().id;
+      console.log(`[HISTÓRICO] ... ${messagesFetched} mensajes revisados, ${totalCount} paquetes encontrados...`);
+    }
+
+    console.log(`[HISTÓRICO] ✅ Escaneo completado. Total de paquetes encontrados: ${totalCount}`);
+
+    // ESTABLECEMOS el contador en la base de datos
+    await pool.query(`
+      INSERT INTO clan_stats (guild, paquetes_tienda)
+      VALUES ($1, $2)
+      ON CONFLICT (guild)
+      DO UPDATE SET paquetes_tienda = $2
+    `, [guildId, totalCount]);
+
+    console.log(`[HISTÓRICO] ✅ Base de datos actualizada con el conteo histórico.`);
+
+  } catch (err) {
+    console.error(`[HISTÓRICO] ❌ Error durante el escaneo:`, err);
+  }
+}
+
+
 /**
  * Publica o actualiza el mensaje de ranking principal.
  */
@@ -183,6 +246,9 @@ const postRankingMessage = async () => {
 };
 
 
+//
+// --- ¡FUNCIÓN MODIFICADA! ---
+//
 client.once(Events.ClientReady, async () => {
   console.log(`✅ Bot conectado como ${client.user.tag}`);
 
@@ -198,10 +264,17 @@ client.once(Events.ClientReady, async () => {
     console.error('❌ Error registrando el comando:', error);
   }
 
+  // --- ¡NUEVA LÍNEA AÑADIDA! ---
+  // Ejecuta el conteo histórico ANTES de empezar el loop normal
+  await backfillStorePackages(process.env.RANKING_CHANNEL_ID, process.env.GUILD_ID);
+  // ---
+
   // Publica el ranking al iniciar y luego cada 5 minutos
   await postRankingMessage();
   setInterval(postRankingMessage, 5 * 60 * 1000);
 });
+// ---
+
 
 client.on(Events.MessageCreate, (message) => {
   if (message.webhookId && message.embeds?.length > 0) {
@@ -212,7 +285,6 @@ client.on(Events.MessageCreate, (message) => {
     if (!guildId) return console.warn('❌ No se pudo obtener el ID del servidor');
 
     // --- ACCIÓN 1: PUNTOS DE USUARIO (SUMA) ---
-    // Busca: (Nombre ha conseguido X puntos...)
     const matchUsuario = description.match(/\(([^)]+) ha conseguido (\d+) puntos[^)]*\)/si);
     if (matchUsuario) {
       const usuario = matchUsuario[1].trim();
@@ -230,13 +302,10 @@ client.on(Events.MessageCreate, (message) => {
     }
 
     // --- ACCIÓN 2: TOTAL DEL CLAN (SOBRESCRIBE) ---
-    // Busca: ...ahora tiene X puntos de experiencia...
-    // Esto se ejecutará SIEMPRE que vea un total, sea de tienda o no.
     const matchTotal = description.match(/ahora tiene\s+([0-9,.]+)\s+puntos de experiencia/si);
     if (matchTotal) {
       const totalPuntos = BigInt(matchTotal[1].replace(/[,.]/g, ''));
 
-      // Esta consulta crea la fila si no existe y SOLO actualiza el total.
       pool.query(`
         INSERT INTO clan_stats (guild, total_puntos)
         VALUES ($1, $2)
@@ -249,11 +318,9 @@ client.on(Events.MessageCreate, (message) => {
     }
 
     // --- ACCIÓN 3: PAQUETES DE TIENDA (SUMA 1) ---
-    // Busca: ...Tienda de Almas...
-    // Esto se ejecuta de forma independiente.
+    // (Esta acción SUMA 1, porque el conteo histórico ya estableció la base)
     const matchTienda = description.match(/Tienda de Almas/si);
     if (matchTienda) {
-      // Esta consulta crea la fila si no existe y SOLO suma 1 a los paquetes.
       pool.query(`
         INSERT INTO clan_stats (guild, paquetes_tienda)
         VALUES ($1, 1)
