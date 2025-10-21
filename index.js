@@ -67,7 +67,7 @@ async function buildRankingEmbed(guild) {
     [guild.id]
   );
 
-  // 2. Obtener Puntos Totales Y Paquetes
+  // 2. Obtener Puntos Totales Y Paquetes (DE VUELTA A clan_stats)
   const resultStats = await pool.query(
     'SELECT total_puntos, paquetes_tienda FROM clan_stats WHERE guild = $1',
     [guild.id]
@@ -82,23 +82,16 @@ async function buildRankingEmbed(guild) {
 
   // 3. Construir el Embed
   const embed = new EmbedBuilder()
-    // --- Encabezado limpio ---
     .setAuthor({ name: 'TEMPORADA DE CLANES 🎃 HALLOWEEN' })
-    .setTitle('➥ 🏆 Ranking del Clan') // Tu cambio
-    
-    // --- ¡AQUÍ ESTÁ LA LÍNEA NUEVA! ---
-    // \u200B es un espacio invisible que crea una línea en blanco
+    .setTitle('➥ 🏆 Ranking del Clan') 
     .setDescription('\u200B') 
-    // ---
-    
     .setColor('#E67E22') // Naranja Halloween
     .setImage(guild.iconURL()) // Logo en la parte inferior
     .setTimestamp();
 
   if (resultUsuarios.rows.length === 0) {
-    embed.setDescription('No hay datos aún.'); // Esto sobrescribe el espacio si no hay datos
+    embed.setDescription('No hay datos aún.'); 
   } else {
-    // --- MEJORA VISUAL: Ranking con Barras de Progreso ---
     const medallas = ['🥇', '🥈', '🥉'];
     const rankingLines = resultUsuarios.rows.map((row, i) => {
       const rank = medallas[i] || `**${i + 1}.**`;
@@ -106,21 +99,17 @@ async function buildRankingEmbed(guild) {
       const puntos = `\`${row.puntos} pts\``;
       const bar = createProgressBar(row.puntos, topPoints, 10);
       
-      // Tu cambio con sangría manual
       return `${rank} ${nombre}\n   ${puntos} ${bar}`;
     }).join('\n\n'); 
 
-    // Añadimos el campo de ranking (esto va DEBAJO de la descripción en blanco)
     embed.addFields({
-      name: '➥ Ranking de Miembros', // Tu cambio
-      value: rankingLines, // Tu versión sin el espacio de línea
+      name: '➥ Ranking de Miembros', 
+      value: rankingLines, 
       inline: false
     });
 
-    // --- MEJORA VISUAL: ESPACIADOR ---
-    embed.addFields({ name: '\u200B', value: '\u200B', inline: false });
+    embed.addFields({ name: '\u200B', value: '\u200B', inline: false }); // Espaciador
 
-    // --- MEJORA VISUAL: COLUMNAS DE STATS ---
     embed.addFields(
       { 
         name: 'Total del Clan', 
@@ -140,9 +129,6 @@ async function buildRankingEmbed(guild) {
 // --- FIN DE TU FUNCIÓN MODIFICADA ---
 
 
-//
-// --- ¡NUEVA FUNCIÓN AÑADIDA! ---
-//
 /**
  * Escanea el historial del canal para contar los paquetes de tienda antiguos.
  * Esto solo se ejecuta una vez al iniciar el bot.
@@ -159,35 +145,49 @@ async function backfillStorePackages(channelId, guildId) {
     let totalCount = 0;
     let lastId;
     let messagesFetched = 0;
+    const batchSize = 100; // Discord permite hasta 100
+
+    console.log(`[HISTÓRICO] Buscando mensajes que contengan "Tienda de Almas"...`);
 
     while (true) {
-      const options = { limit: 100 };
+      const options = { limit: batchSize };
       if (lastId) {
         options.before = lastId;
       }
 
       const messages = await channel.messages.fetch(options);
       if (messages.size === 0) {
+        console.log(`[HISTÓRICO] No se encontraron más mensajes.`);
         break; // Terminamos de leer
       }
 
       messages.forEach(message => {
+        // Log para depurar qué mensajes está leyendo
+        // console.log(`[DEBUG] Revisando mensaje ID ${message.id} de ${message.author.tag}`);
         if (message.webhookId && message.embeds?.length > 0) {
           const description = message.embeds[0].description || message.embeds[0].title || '';
-          if (description.match(/Tienda de Almas/si)) {
+          // Log para depurar el contenido del embed
+          // console.log(`[DEBUG] Embed description: ${description}`);
+          
+          // Regex más robusta para "Tienda de Almas" (insensible a mayúsculas/minúsculas)
+          if (description.match(/Tienda de Almas/i)) { 
             totalCount++;
+            // console.log(`[DEBUG] ¡Encontrado! Paquete ${totalCount}`);
           }
         }
       });
       
       messagesFetched += messages.size;
       lastId = messages.last().id;
-      console.log(`[HISTÓRICO] ... ${messagesFetched} mensajes revisados, ${totalCount} paquetes encontrados...`);
+      console.log(`[HISTÓRICO] ... ${messagesFetched} mensajes revisados, ${totalCount} paquetes encontrados hasta ahora...`);
+
+      // Pequeña pausa para no sobrecargar la API de Discord
+      await new Promise(resolve => setTimeout(resolve, 500)); 
     }
 
     console.log(`[HISTÓRICO] ✅ Escaneo completado. Total de paquetes encontrados: ${totalCount}`);
 
-    // ESTABLECEMOS el contador en la base de datos
+    // ESTABLECEMOS el contador en la tabla 'clan_stats' (REVERTIDO)
     await pool.query(`
       INSERT INTO clan_stats (guild, paquetes_tienda)
       VALUES ($1, $2)
@@ -195,10 +195,13 @@ async function backfillStorePackages(channelId, guildId) {
       DO UPDATE SET paquetes_tienda = $2
     `, [guildId, totalCount]);
 
-    console.log(`[HISTÓRICO] ✅ Base de datos actualizada con el conteo histórico.`);
+    console.log(`[HISTÓRICO] ✅ Base de datos (clan_stats.paquetes_tienda) actualizada con el conteo histórico.`);
 
   } catch (err) {
     console.error(`[HISTÓRICO] ❌ Error durante el escaneo:`, err);
+    if (err.code === 50013) { // Missing Permissions
+      console.error(`[HISTÓRICO] ❌ El bot no tiene permiso para leer el historial de mensajes en este canal.`);
+    }
   }
 }
 
@@ -246,9 +249,6 @@ const postRankingMessage = async () => {
 };
 
 
-//
-// --- ¡FUNCIÓN MODIFICADA! ---
-//
 client.once(Events.ClientReady, async () => {
   console.log(`✅ Bot conectado como ${client.user.tag}`);
 
@@ -264,18 +264,16 @@ client.once(Events.ClientReady, async () => {
     console.error('❌ Error registrando el comando:', error);
   }
 
-  // --- ¡NUEVA LÍNEA AÑADIDA! ---
   // Ejecuta el conteo histórico ANTES de empezar el loop normal
   await backfillStorePackages(process.env.RANKING_CHANNEL_ID, process.env.GUILD_ID);
-  // ---
 
   // Publica el ranking al iniciar y luego cada 5 minutos
   await postRankingMessage();
   setInterval(postRankingMessage, 5 * 60 * 1000);
 });
-// ---
 
 
+// --- LÓGICA DE WEBHOOK REVERTIDA A clan_stats ---
 client.on(Events.MessageCreate, (message) => {
   if (message.webhookId && message.embeds?.length > 0) {
     const embed = message.embeds[0];
@@ -302,6 +300,7 @@ client.on(Events.MessageCreate, (message) => {
     }
 
     // --- ACCIÓN 2: TOTAL DEL CLAN (SOBRESCRIBE) ---
+    // Escribe en la tabla 'clan_stats'
     const matchTotal = description.match(/ahora tiene\s+([0-9,.]+)\s+puntos de experiencia/si);
     if (matchTotal) {
       const totalPuntos = BigInt(matchTotal[1].replace(/[,.]/g, ''));
@@ -318,8 +317,8 @@ client.on(Events.MessageCreate, (message) => {
     }
 
     // --- ACCIÓN 3: PAQUETES DE TIENDA (SUMA 1) ---
-    // (Esta acción SUMA 1, porque el conteo histórico ya estableció la base)
-    const matchTienda = description.match(/Tienda de Almas/si);
+    // Escribe en la tabla 'clan_stats'
+    const matchTienda = description.match(/Tienda de Almas/i); // Usamos 'i' para ser insensible a mayúsculas
     if (matchTienda) {
       pool.query(`
         INSERT INTO clan_stats (guild, paquetes_tienda)
@@ -497,10 +496,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
 
 // --- INICIO DEL BOT ---
+// (REVERTIDO A clan_stats)
 (async () => {
   try {
     console.log('Conectando a la base de datos...');
     
+    // 1. Crear tabla 'puntos'
     await pool.query(`
       CREATE TABLE IF NOT EXISTS puntos (
         guild TEXT,
@@ -511,19 +512,22 @@ client.on(Events.InteractionCreate, async (interaction) => {
     `);
     console.log('✅ Tabla "puntos" lista');
 
+    // 2. Crear tabla 'clan_stats' (REVERTIDO)
     await pool.query(`
       CREATE TABLE IF NOT EXISTS clan_stats (
         guild TEXT PRIMARY KEY,
-        total_puntos BIGINT DEFAULT 0
+        total_puntos BIGINT DEFAULT 0,
+        paquetes_tienda INTEGER DEFAULT 0 
       )
     `);
     console.log('✅ Tabla "clan_stats" lista');
 
+    // 3. Asegurar la columna 'paquetes_tienda' (por si acaso)
     await pool.query(`
       ALTER TABLE clan_stats
       ADD COLUMN IF NOT EXISTS paquetes_tienda INTEGER DEFAULT 0
     `);
-    console.log('✅ Columna "paquetes_tienda" asegurada');
+    console.log('✅ Columna "paquetes_tienda" asegurada en clan_stats');
     
     console.log('Iniciando sesión en Discord...');
     await client.login(process.env.DISCORD_TOKEN);
