@@ -211,7 +211,8 @@ client.on(Events.MessageCreate, (message) => {
 
     if (!guildId) return console.warn('❌ No se pudo obtener el ID del servidor');
 
-    // 1. Regex para el usuario (Esta no cambia)
+    // --- ACCIÓN 1: PUNTOS DE USUARIO (SUMA) ---
+    // Busca: (Nombre ha conseguido X puntos...)
     const matchUsuario = description.match(/\(([^)]+) ha conseguido (\d+) puntos[^)]*\)/si);
     if (matchUsuario) {
       const usuario = matchUsuario[1].trim();
@@ -228,47 +229,41 @@ client.on(Events.MessageCreate, (message) => {
       });
     }
 
-    // --- LÓGICA DE PUNTOS TOTALES Y TIENDA ---
-    
-    // 2. Regex para "Tienda de Almas" (La más específica DEBE ir primero)
-    const matchTienda = description.match(/¡El clan LPCA ahora tiene\s+([0-9,.]+)\s+puntos de experiencia!\s+Tienda de Almas/si);
+    // --- ACCIÓN 2: TOTAL DEL CLAN (SOBRESCRIBE) ---
+    // Busca: ...ahora tiene X puntos de experiencia...
+    // Esto se ejecutará SIEMPRE que vea un total, sea de tienda o no.
+    const matchTotal = description.match(/ahora tiene\s+([0-9,.]+)\s+puntos de experiencia/si);
+    if (matchTotal) {
+      const totalPuntos = BigInt(matchTotal[1].replace(/[,.]/g, ''));
 
-    if (matchTienda) {
-      const totalPuntos = BigInt(matchTienda[1].replace(/[,.]/g, ''));
-      console.log(`📦 ¡Paquete de tienda detectado! Actualizando total a ${totalPuntos}.`);
-
-      // Actualiza AMBOS: el total Y el contador de paquetes
+      // Esta consulta crea la fila si no existe y SOLO actualiza el total.
       pool.query(`
-        INSERT INTO clan_stats (guild, total_puntos, paquetes_tienda)
-        VALUES ($1, $2, 1)
+        INSERT INTO clan_stats (guild, total_puntos)
+        VALUES ($1, $2)
+        ON CONFLICT (guild)
+        DO UPDATE SET total_puntos = $2
+      `, [guildId, totalPuntos], (err) => {
+        if (err) console.error('❌ Error al guardar puntos totales:', err);
+        else console.log(`🔵 Puntos totales del clan actualizados: ${totalPuntos}`);
+      });
+    }
+
+    // --- ACCIÓN 3: PAQUETES DE TIENDA (SUMA 1) ---
+    // Busca: ...Tienda de Almas...
+    // Esto se ejecuta de forma independiente.
+    const matchTienda = description.match(/Tienda de Almas/si);
+    if (matchTienda) {
+      // Esta consulta crea la fila si no existe y SOLO suma 1 a los paquetes.
+      pool.query(`
+        INSERT INTO clan_stats (guild, paquetes_tienda)
+        VALUES ($1, 1)
         ON CONFLICT (guild)
         DO UPDATE SET 
-          total_puntos = $2,
           paquetes_tienda = clan_stats.paquetes_tienda + 1
-      `, [guildId, totalPuntos], (err) => {
-        if (err) console.error('❌ Error al guardar stats (tienda):', err);
+      `, [guildId], (err) => {
+        if (err) console.error('❌ Error al guardar paquete de tienda:', err);
+        else console.log(`📦 ¡Paquete de tienda detectado!`);
       });
-
-    } else {
-      // 3. Regex genérica (Solo se ejecuta si la de la tienda no coincidió)
-      const matchTotal = description.match(/ahora tiene\s+([0-9,.]+)\s+puntos de experiencia/si);
-      
-      if (matchTotal) {
-        const totalPuntos = BigInt(matchTotal[1].replace(/[,.]/g, ''));
-        console.log(`🔵 Puntos totales (Genérico) actualizados: ${totalPuntos}`);
-
-        // Actualiza SÓLO el total
-        pool.query(`
-          INSERT INTO clan_stats (guild, total_puntos)
-          VALUES ($1, $2)
-          ON CONFLICT (guild)
-          DO UPDATE SET total_puntos = $2
-        `, [guildId, totalPuntos], (err) => {
-          if (err) console.error('❌ Error al guardar puntos totales (genérico):', err);
-        });
-      } else {
-        console.warn('⚠️ No se encontró el total de puntos del clan en el webhook.');
-      }
     }
   }
 });
