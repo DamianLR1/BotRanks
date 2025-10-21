@@ -145,7 +145,7 @@ async function backfillStorePackages(channelId, guildId) {
     let totalCount = 0;
     let lastId;
     let messagesFetched = 0;
-    const batchSize = 100; // Discord permite hasta 100
+    const batchSize = 100;
 
     console.log(`[HISTÓRICO] Buscando mensajes que contengan "Tienda de Almas"...`);
 
@@ -158,21 +158,15 @@ async function backfillStorePackages(channelId, guildId) {
       const messages = await channel.messages.fetch(options);
       if (messages.size === 0) {
         console.log(`[HISTÓRICO] No se encontraron más mensajes.`);
-        break; // Terminamos de leer
+        break; 
       }
 
       messages.forEach(message => {
-        // Log para depurar qué mensajes está leyendo
-        // console.log(`[DEBUG] Revisando mensaje ID ${message.id} de ${message.author.tag}`);
         if (message.webhookId && message.embeds?.length > 0) {
           const description = message.embeds[0].description || message.embeds[0].title || '';
-          // Log para depurar el contenido del embed
-          // console.log(`[DEBUG] Embed description: ${description}`);
           
-          // Regex más robusta para "Tienda de Almas" (insensible a mayúsculas/minúsculas)
           if (description.match(/Tienda de Almas/i)) { 
             totalCount++;
-            // console.log(`[DEBUG] ¡Encontrado! Paquete ${totalCount}`);
           }
         }
       });
@@ -181,13 +175,11 @@ async function backfillStorePackages(channelId, guildId) {
       lastId = messages.last().id;
       console.log(`[HISTÓRICO] ... ${messagesFetched} mensajes revisados, ${totalCount} paquetes encontrados hasta ahora...`);
 
-      // Pequeña pausa para no sobrecargar la API de Discord
       await new Promise(resolve => setTimeout(resolve, 500)); 
     }
 
     console.log(`[HISTÓRICO] ✅ Escaneo completado. Total de paquetes encontrados: ${totalCount}`);
 
-    // ESTABLECEMOS el contador en la tabla 'clan_stats' (REVERTIDO)
     await pool.query(`
       INSERT INTO clan_stats (guild, paquetes_tienda)
       VALUES ($1, $2)
@@ -199,7 +191,7 @@ async function backfillStorePackages(channelId, guildId) {
 
   } catch (err) {
     console.error(`[HISTÓRICO] ❌ Error durante el escaneo:`, err);
-    if (err.code === 50013) { // Missing Permissions
+    if (err.code === 50013) { 
       console.error(`[HISTÓRICO] ❌ El bot no tiene permiso para leer el historial de mensajes en este canal.`);
     }
   }
@@ -211,6 +203,7 @@ async function backfillStorePackages(channelId, guildId) {
  */
 const postRankingMessage = async () => {
   try {
+    // Esta función sigue usando RANKING_CHANNEL_ID, ¡lo cual es correcto!
     const channel = await client.channels.fetch(process.env.RANKING_CHANNEL_ID);
     if (!channel) {
       console.error(`❌ No se encontró el canal con ID ${process.env.RANKING_CHANNEL_ID}`);
@@ -222,18 +215,17 @@ const postRankingMessage = async () => {
       rankingMessage = pinned.find(m => m.author.id === client.user.id);
     }
 
-    // Llamamos a la función 'buildRankingEmbed'
     const embed = await buildRankingEmbed(channel.guild);
 
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId('refresh_ranking')
         .setLabel('🔄 Actualizar ahora')
-        .setStyle(ButtonStyle.Primary), // Azul, acción principal
+        .setStyle(ButtonStyle.Primary), 
       new ButtonBuilder()
         .setCustomId('view_full_ranking')
         .setLabel('➡️ Ver más')
-        .setStyle(ButtonStyle.Secondary) // Gris, acción secundaria
+        .setStyle(ButtonStyle.Secondary) 
     );
 
     if (!rankingMessage) {
@@ -264,8 +256,10 @@ client.once(Events.ClientReady, async () => {
     console.error('❌ Error registrando el comando:', error);
   }
 
-  // Ejecuta el conteo histórico ANTES de empezar el loop normal
-  await backfillStorePackages(process.env.RANKING_CHANNEL_ID, process.env.GUILD_ID);
+  // --- ¡CORRECCIÓN APLICADA! ---
+  // Ahora escanea el canal correcto usando tu variable CHANNER_ID
+  await backfillStorePackages(process.env.CHANNER_ID, process.env.GUILD_ID);
+  // ---
 
   // Publica el ranking al iniciar y luego cada 5 minutos
   await postRankingMessage();
@@ -273,9 +267,10 @@ client.once(Events.ClientReady, async () => {
 });
 
 
-// --- LÓGICA DE WEBHOOK REVERTIDA A clan_stats ---
+// --- ¡CORRECCIÓN APLICADA! ---
+// El bot ahora SOLO lee mensajes del canal de tu variable CHANNER_ID
 client.on(Events.MessageCreate, (message) => {
-  if (message.webhookId && message.embeds?.length > 0) {
+  if (message.channel.id === process.env.CHANNER_ID && message.webhookId && message.embeds?.length > 0) {
     const embed = message.embeds[0];
     const description = embed.description || embed.title || '';
     const guildId = message.guild?.id;
@@ -300,7 +295,6 @@ client.on(Events.MessageCreate, (message) => {
     }
 
     // --- ACCIÓN 2: TOTAL DEL CLAN (SOBRESCRIBE) ---
-    // Escribe en la tabla 'clan_stats'
     const matchTotal = description.match(/ahora tiene\s+([0-9,.]+)\s+puntos de experiencia/si);
     if (matchTotal) {
       const totalPuntos = BigInt(matchTotal[1].replace(/[,.]/g, ''));
@@ -317,8 +311,7 @@ client.on(Events.MessageCreate, (message) => {
     }
 
     // --- ACCIÓN 3: PAQUETES DE TIENDA (SUMA 1) ---
-    // Escribe en la tabla 'clan_stats'
-    const matchTienda = description.match(/Tienda de Almas/i); // Usamos 'i' para ser insensible a mayúsculas
+    const matchTienda = description.match(/Tienda de Almas/i); 
     if (matchTienda) {
       pool.query(`
         INSERT INTO clan_stats (guild, paquetes_tienda)
@@ -496,12 +489,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
 
 // --- INICIO DEL BOT ---
-// (REVERTIDO A clan_stats)
 (async () => {
   try {
     console.log('Conectando a la base de datos...');
     
-    // 1. Crear tabla 'puntos'
     await pool.query(`
       CREATE TABLE IF NOT EXISTS puntos (
         guild TEXT,
@@ -512,7 +503,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
     `);
     console.log('✅ Tabla "puntos" lista');
 
-    // 2. Crear tabla 'clan_stats' (REVERTIDO)
     await pool.query(`
       CREATE TABLE IF NOT EXISTS clan_stats (
         guild TEXT PRIMARY KEY,
@@ -522,7 +512,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
     `);
     console.log('✅ Tabla "clan_stats" lista');
 
-    // 3. Asegurar la columna 'paquetes_tienda' (por si acaso)
     await pool.query(`
       ALTER TABLE clan_stats
       ADD COLUMN IF NOT EXISTS paquetes_tienda INTEGER DEFAULT 0
