@@ -67,7 +67,7 @@ async function buildRankingEmbed(guild) {
     [guild.id]
   );
 
-  // 2. Obtener Puntos Totales Y Paquetes
+  // 2. Obtener Puntos Totales Y Paquetes (DE VUELTA A clan_stats)
   const resultStats = await pool.query(
     'SELECT total_puntos, paquetes_tienda FROM clan_stats WHERE guild = $1',
     [guild.id]
@@ -129,7 +129,6 @@ async function buildRankingEmbed(guild) {
 // --- FIN DE TU FUNCIÓN MODIFICADA ---
 
 
-// --- ¡NUEVA FUNCIÓN DE ESCANEO CON LÍMITES! ---
 /**
  * Escanea el historial del canal para contar los paquetes de tienda antiguos.
  * Esto solo se ejecuta una vez al iniciar el bot.
@@ -148,11 +147,9 @@ async function backfillStorePackages(channelId, guildId) {
     let messagesFetched = 0;
     const batchSize = 100;
 
-    // --- ¡REGLAS DE LÍMITE! ---
-    const maxPackagesToFind = 115; // Límite de paquetes a encontrar
-    const maxStaleMessages = 500;   // Límite de mensajes revisados SIN encontrar nada
-    let messagesSinceLastFind = 0;  // Contador de inactividad
-    // ---
+    const maxPackagesToFind = 115; 
+    const maxStaleMessages = 500;   
+    let messagesSinceLastFind = 0;  
 
     console.log(`[HISTÓRICO] Buscando mensajes (Max paquetes: ${maxPackagesToFind}, Parar si no encuentra en ${maxStaleMessages} mensajes)...`);
 
@@ -168,7 +165,7 @@ async function backfillStorePackages(channelId, guildId) {
         break; 
       }
 
-      let foundInThisBatch = false; // Bandera para esta tanda de 100 mensajes
+      let foundInThisBatch = false; 
       
       messages.every(message => { 
         if (message.webhookId && message.embeds?.length > 0) {
@@ -176,47 +173,41 @@ async function backfillStorePackages(channelId, guildId) {
           
           if (description.match(/Tienda de Almas/i)) { 
             totalCount++;
-            foundInThisBatch = true; // Marcamos que encontramos uno
+            foundInThisBatch = true; 
           }
         }
         
         if (totalCount >= maxPackagesToFind) {
-          return false; // Detiene el bucle .every()
+          return false; 
         }
-        return true; // Continúa el bucle .every()
+        return true; 
       });
       
       messagesFetched += messages.size;
       lastId = messages.last().id;
       console.log(`[HISTÓRICO] ... ${messagesFetched} mensajes revisados, ${totalCount} paquetes encontrados...`);
 
-      // --- REVISIÓN DE LÍMITES (BUCLE EXTERNO) ---
-
-      // 1. ¿Alcanzamos el máximo de paquetes?
       if (totalCount >= maxPackagesToFind) {
         console.log(`[HISTÓRICO] Límite de ${maxPackagesToFind} paquetes alcanzado. Deteniendo escaneo.`);
-        break; // Detiene el bucle while(true)
+        break; 
       }
 
-      // 2. ¿Alcanzamos el límite de inactividad?
       if (foundInThisBatch) {
-        messagesSinceLastFind = 0; // Reinicia el contador de inactividad
+        messagesSinceLastFind = 0; 
       } else {
-        messagesSinceLastFind += messages.size; // Suma los mensajes de esta tanda
+        messagesSinceLastFind += messages.size; 
       }
       
       if (messagesSinceLastFind >= maxStaleMessages) {
         console.log(`[HISTÓRICO] No se encontraron paquetes en los últimos ${maxStaleMessages} mensajes. Deteniendo escaneo.`);
-        break; // Detiene el bucle while(true)
+        break; 
       }
-      // ---
 
       await new Promise(resolve => setTimeout(resolve, 500)); 
     }
 
     console.log(`[HISTÓRICO] ✅ Escaneo completado. Total de paquetes encontrados: ${totalCount}`);
 
-    // ESTABLECEMOS el contador en la base de datos
     await pool.query(`
       INSERT INTO clan_stats (guild, paquetes_tienda)
       VALUES ($1, $2)
@@ -226,8 +217,7 @@ async function backfillStorePackages(channelId, guildId) {
 
     console.log(`[HISTÓRICO] ✅ Base de datos (clan_stats.paquetes_tienda) actualizada con el conteo histórico.`);
 
-  } catch (err)
- {
+  } catch (err) {
     console.error(`[HISTÓRICO] ❌ Error durante el escaneo:`, err);
     if (err.code === 50013) { 
       console.error(`[HISTÓRICO] ❌ El bot no tiene permiso para leer el historial de mensajes en este canal.`);
@@ -241,7 +231,6 @@ async function backfillStorePackages(channelId, guildId) {
  */
 const postRankingMessage = async () => {
   try {
-    // Publica en el CANAL DE RANKING
     const channel = await client.channels.fetch(process.env.RANKING_CHANNEL_ID);
     if (!channel) {
       console.error(`❌ No se encontró el canal con ID ${process.env.RANKING_CHANNEL_ID}`);
@@ -303,8 +292,9 @@ client.once(Events.ClientReady, async () => {
 });
 
 
-// Escucha nuevos mensajes SÓLO en el CANAL DEL WEBHOOK
+// --- ¡BLOQUE CON LOS LOGS DE DEBUG! ---
 client.on(Events.MessageCreate, (message) => {
+  // Asegúrate que solo lee el canal correcto
   if (message.channel.id === process.env.CHANNER_ID && message.webhookId && message.embeds?.length > 0) {
     const embed = message.embeds[0];
     const description = embed.description || embed.title || '';
@@ -312,9 +302,279 @@ client.on(Events.MessageCreate, (message) => {
 
     if (!guildId) return console.warn('❌ No se pudo obtener el ID del servidor');
 
+    // --- DEBUG: Loguea la descripción exacta ---
+    console.log('[DEBUG] Procesando descripción:', JSON.stringify(description)); 
+    // ---
+
     // --- ACCIÓN 1: PUNTOS DE USUARIO (SUMA) ---
     const matchUsuario = description.match(/\(([^)]+) ha conseguido (\d+) puntos[^)]*\)/si);
+    
+    // --- DEBUG: Loguea el resultado del match ---
+    console.log('[DEBUG] Resultado de matchUsuario:', matchUsuario);
+    // ---
+
     if (matchUsuario) {
+      const usuario = matchUsuario[1].trim();
+      const puntos = parseInt(matchUsuario[2]);
+
+      // --- DEBUG: Loguea los datos extraídos ---
+      console.log(`[DEBUG] Usuario extraído: "${usuario}", Puntos extraídos: ${puntos}`);
+      // ---
+
+      pool.query(`
+        INSERT INTO puntos (guild, usuario, puntos)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (guild, usuario)
+        DO UPDATE SET puntos = puntos.puntos + $3
+      `, [guildId, usuario, puntos], (err) => {
+        if (err) {
+            // --- DEBUG: Loguea errores de DB específicos ---
+            console.error(`❌ Error al guardar puntos para ${usuario}:`, err);
+            // ---
+        } else {
+            console.log(`🟢 ${usuario} ganó ${puntos} puntos`);
+        }
+      });
+    } else {
+        // Añadimos un aviso si no encuentra al usuario
+        console.warn('[WARN] No se encontró patrón de puntos de usuario en la descripción.');
+    }
+
+    // --- ACCIÓN 2: TOTAL DEL CLAN (SOBRESCRIBE) ---
+    const matchTotal = description.match(/ahora tiene\s+([0-9,.]+)\s+puntos de experiencia/si);
+    if (matchTotal) {
+      const totalPuntos = BigInt(matchTotal[1].replace(/[,.]/g, ''));
+
+      pool.query(`
+        INSERT INTO clan_stats (guild, total_puntos)
+        VALUES ($1, $2)
+        ON CONFLICT (guild)
+        DO UPDATE SET total_puntos = $2
+      `, [guildId, totalPuntos], (err) => {
+        if (err) console.error('❌ Error al guardar puntos totales:', err);
+        else console.log(`🔵 Puntos totales del clan actualizados: ${totalPuntos}`);
+      });
+    }
+
+    // --- ACCIÓN 3: PAQUETES DE TIENDA (SUMA 1) ---
+    const matchTienda = description.match(/Tienda de Almas/i); 
+    if (matchTienda) {
+      pool.query(`
+        INSERT INTO clan_stats (guild, paquetes_tienda)
+        VALUES ($1, 1)
+        ON CONFLICT (guild)
+        DO UPDATE SET 
+          paquetes_tienda = clan_stats.paquetes_tienda + 1
+      `, [guildId], (err) => {
+        if (err) console.error('❌ Error al guardar paquete de tienda:', err);
+        else console.log(`📦 ¡Paquete de tienda detectado!`);
+      });
+    }
+  }
+});
+// --- FIN DEL BLOQUE CON LOGS ---
+
+
+client.on(Events.InteractionCreate, async (interaction) => {
+  if (!interaction.guild) return;
+
+  // Botón "Actualizar ahora"
+  if (interaction.isButton() && interaction.customId === 'refresh_ranking') {
+    await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
+
+    const embed = await buildRankingEmbed(interaction.guild);
+
+    if (rankingMessage) {
+      await rankingMessage.edit({ embeds: [embed] });
+      await interaction.editReply({ content: '✅ Ranking actualizado.' });
+    } else {
+      await interaction.editReply({ content: '❌ No se pudo encontrar el mensaje de ranking.' });
+    }
+    return;
+  }
+
+  // Botón "Ver más"
+  if (interaction.isButton() && interaction.customId === 'view_full_ranking') {
+    await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
+
+    const pageSize = 10;
+    let currentPage = 0;
+
+    const totalResult = await pool.query('SELECT COUNT(*) FROM puntos WHERE guild = $1', [interaction.guild.id]);
+    const totalRows = parseInt(totalResult.rows[0].count);
+    const totalPages = Math.ceil(totalRows / pageSize) || 1;
+
+    const displayPage = async (page) => {
+      const offset = page * pageSize;
+
+      const result = await pool.query(
+        'SELECT usuario, puntos FROM puntos WHERE guild = $1 ORDER BY puntos DESC LIMIT $2 OFFSET $3',
+        [interaction.guild.id, pageSize, offset]
+      );
+      
+      const pageRows = result.rows;
+
+      const lines = pageRows.map((row, i) => {
+        const rank = offset + i + 1;
+        return `${rank}. **${row.usuario}** — ${row.puntos} puntos`;
+      });
+
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('prev_page_full')
+          .setLabel('⬅️ Anterior')
+          .setStyle(ButtonStyle.Secondary)
+          .setDisabled(page === 0),
+        new ButtonBuilder()
+          .setCustomId('next_page_full')
+          .setLabel('➡️ Siguiente')
+          .setStyle(ButtonStyle.Secondary)
+          .setDisabled(page >= totalPages - 1)
+      );
+
+      await interaction.editReply({
+        content: `🏆 **Ranking completo (Página ${page + 1}/${totalPages}):**\n\n${lines.join('\n') || 'No hay datos aún.'}`,
+        components: [row],
+      });
+    };
+
+    await displayPage(currentPage);
+
+    const collector = interaction.channel.createMessageComponentCollector({
+      filter: i => ['prev_page_full', 'next_page_full'].includes(i.customId) && i.user.id === interaction.user.id,
+      time: 60_000
+    });
+
+    collector.on('collect', async i => {
+      if (i.customId === 'prev_page_full') currentPage--;
+      if (i.customId === 'next_page_full') currentPage++;
+      await i.deferUpdate();
+      await displayPage(currentPage);
+    });
+
+    collector.on('end', () => {
+      interaction.editReply({ components: [] });
+    });
+
+    return;
+  }
+
+  // Comando /rankclan
+  if (interaction.isChatInputCommand() && interaction.commandName === 'rankclan') {
+    await interaction.deferReply(); 
+    
+    const pageSize = 10;
+    let currentPage = 0;
+
+    const totalResult = await pool.query('SELECT COUNT(*) FROM puntos WHERE guild = $1', [interaction.guild.id]);
+    const totalRows = parseInt(totalResult.rows[0].count);
+    const totalPages = Math.ceil(totalRows / pageSize) || 1;
+
+    const fetchAndDisplay = async (page) => {
+      try {
+        const offset = page * pageSize;
+        
+        const result = await pool.query(
+          'SELECT usuario, puntos FROM puntos WHERE guild = $1 ORDER BY puntos DESC LIMIT $2 OFFSET $3',
+          [interaction.guild.id, pageSize, offset]
+        );
+
+        const rows = result.rows;
+        if (!rows.length) {
+          return interaction.editReply({ content: '⚠️ No hay puntos registrados aún.' });
+        }
+
+        const lines = rows.map((row, i) => {
+          const rank = offset + i + 1;
+          return `${rank}. **${row.usuario}** — ${row.puntos} puntos`;
+        });
+
+        const row = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId('prev_page_cmd')
+            .setLabel('⬅️ Anterior')
+            .setStyle(ButtonStyle.Primary)
+            .setDisabled(page === 0),
+          new ButtonBuilder()
+            .setCustomId('next_page_cmd')
+            .setLabel('➡️ Siguiente')
+            .setStyle(ButtonStyle.Primary)
+            .setDisabled(page >= totalPages - 1)
+        );
+
+        await interaction.editReply({
+          content: `🏆 **Ranking del Clan** (Página ${page + 1}/${totalPages}):\n\n${lines.join('\n')}`,
+          components: [row]
+        });
+
+      } catch (err) {
+        console.error(err);
+        if (interaction.replied || interaction.deferred) {
+          await interaction.editReply({ content: '❌ Error al obtener el ranking.', components: [] });
+        }
+      }
+    };
+
+    await fetchAndDisplay(currentPage);
+
+    const collector = interaction.channel.createMessageComponentCollector({
+      filter: i => ['prev_page_cmd', 'next_page_cmd'].includes(i.customId) && i.user.id === interaction.user.id,
+      time: 60_000
+    });
+
+    collector.on('collect', async i => {
+      if (i.customId === 'prev_page_cmd') currentPage--;
+      if (i.customId === 'next_page_cmd') currentPage++;
+      await i.deferUpdate();
+      await fetchAndDisplay(currentPage);
+    });
+
+    collector.on('end', () => {
+      interaction.editReply({ components: [] });
+    });
+  }
+});
+
+
+// --- INICIO DEL BOT ---
+(async () => {
+  try {
+    console.log('Conectando a la base de datos...');
+    
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS puntos (
+        guild TEXT,
+        usuario TEXT,
+        puntos INTEGER DEFAULT 0,
+        PRIMARY KEY (guild, usuario)
+      )
+    `);
+    console.log('✅ Tabla "puntos" lista');
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS clan_stats (
+        guild TEXT PRIMARY KEY,
+        total_puntos BIGINT DEFAULT 0,
+        paquetes_tienda INTEGER DEFAULT 0 
+      )
+    `);
+    console.log('✅ Tabla "clan_stats" lista');
+
+    await pool.query(`
+      ALTER TABLE clan_stats
+      ADD COLUMN IF NOT EXISTS paquetes_tienda INTEGER DEFAULT 0
+    `);
+    console.log('✅ Columna "paquetes_tienda" asegurada en clan_stats');
+    
+    console.log('Iniciando sesión en Discord...');
+    await client.login(process.env.DISCORD_TOKEN);
+
+  } catch (err) {
+    console.error('❌ Error fatal durante el inicio:', err);
+    process.exit(1); 
+  }
+})();
+io) {
       const usuario = matchUsuario[1].trim();
       const puntos = parseInt(matchUsuario[2]);
 
