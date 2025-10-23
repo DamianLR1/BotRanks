@@ -24,7 +24,7 @@ function createProgressBar(value, maxValue, size = 10) {
   }
   const percentage = value / maxValue;
   const progress = Math.round(size * percentage);
-  
+
   const filled = '█';
   const empty = '░';
 
@@ -59,7 +59,6 @@ const commands = [
 
 let rankingMessage = null; // Variable para almacenar el mensaje del ranking
 
-// --- INICIO DE TU FUNCIÓN MODIFICADA ---
 async function buildRankingEmbed(guild) {
   // 1. Obtener Top 10 Usuarios
   const resultUsuarios = await pool.query(
@@ -67,12 +66,12 @@ async function buildRankingEmbed(guild) {
     [guild.id]
   );
 
-  // 2. Obtener Puntos Totales Y Paquetes (DE VUELTA A clan_stats)
+  // 2. Obtener Puntos Totales Y Paquetes
   const resultStats = await pool.query(
     'SELECT total_puntos, paquetes_tienda FROM clan_stats WHERE guild = $1',
     [guild.id]
   );
-  
+
   const stats = resultStats.rows[0] || { total_puntos: '0', paquetes_tienda: 0 };
   const totalPuntos = stats.total_puntos;
   const paquetesTienda = stats.paquetes_tienda;
@@ -83,14 +82,14 @@ async function buildRankingEmbed(guild) {
   // 3. Construir el Embed
   const embed = new EmbedBuilder()
     .setAuthor({ name: 'TEMPORADA DE CLANES 🎃 HALLOWEEN' })
-    .setTitle('➥ 🏆 Ranking del Clan') 
-    .setDescription('\u200B') 
+    .setTitle('➥ 🏆 Ranking del Clan')
+    .setDescription('\u200B')
     .setColor('#E67E22') // Naranja Halloween
     .setImage(guild.iconURL()) // Logo en la parte inferior
     .setTimestamp();
 
   if (resultUsuarios.rows.length === 0) {
-    embed.setDescription('No hay datos aún.'); 
+    embed.setDescription('No hay datos aún.');
   } else {
     const medallas = ['🥇', '🥈', '🥉'];
     const rankingLines = resultUsuarios.rows.map((row, i) => {
@@ -98,23 +97,23 @@ async function buildRankingEmbed(guild) {
       const nombre = `**${row.usuario}**`;
       const puntos = `\`${row.puntos} pts\``;
       const bar = createProgressBar(row.puntos, topPoints, 10);
-      
+
       return `${rank} ${nombre}\n   ${puntos} ${bar}`;
-    }).join('\n\n'); 
+    }).join('\n\n');
 
     embed.addFields({
-      name: '➥ Ranking de Miembros', 
-      value: rankingLines, 
+      name: '➥ Ranking de Miembros',
+      value: rankingLines,
       inline: false
     });
 
     embed.addFields({ name: '\u200B', value: '\u200B', inline: false }); // Espaciador
 
     embed.addFields(
-      { 
-        name: 'Total del Clan', 
+      {
+        name: 'Total del Clan',
         value: `**\`${BigInt(totalPuntos).toLocaleString('es')} pts\`**`,
-        inline: true 
+        inline: true
       },
       {
         name: 'Paquetes de tienda',
@@ -123,10 +122,9 @@ async function buildRankingEmbed(guild) {
       }
     );
   }
-  
+
   return embed;
 }
-// --- FIN DE TU FUNCIÓN MODIFICADA ---
 
 
 /**
@@ -147,9 +145,9 @@ async function backfillStorePackages(channelId, guildId) {
     let messagesFetched = 0;
     const batchSize = 100;
 
-    const maxPackagesToFind = 115; 
-    const maxStaleMessages = 500;   
-    let messagesSinceLastFind = 0;  
+    const maxPackagesToFind = 115;
+    const maxStaleMessages = 500;
+    let messagesSinceLastFind = 0;
 
     console.log(`[HISTÓRICO] Buscando mensajes (Max paquetes: ${maxPackagesToFind}, Parar si no encuentra en ${maxStaleMessages} mensajes)...`);
 
@@ -162,48 +160,48 @@ async function backfillStorePackages(channelId, guildId) {
       const messages = await channel.messages.fetch(options);
       if (messages.size === 0) {
         console.log(`[HISTÓRICO] No se encontraron más mensajes (fin del historial).`);
-        break; 
+        break;
       }
 
-      let foundInThisBatch = false; 
-      
-      messages.every(message => { 
+      let foundInThisBatch = false;
+
+      messages.every(message => {
         if (message.webhookId && message.embeds?.length > 0) {
           const description = message.embeds[0].description || message.embeds[0].title || '';
-          
-          if (description.match(/Tienda de Almas/i)) { 
+
+          if (description.match(/Tienda de Almas/i)) {
             totalCount++;
-            foundInThisBatch = true; 
+            foundInThisBatch = true;
           }
         }
-        
+
         if (totalCount >= maxPackagesToFind) {
-          return false; 
+          return false;
         }
-        return true; 
+        return true;
       });
-      
+
       messagesFetched += messages.size;
       lastId = messages.last().id;
       console.log(`[HISTÓRICO] ... ${messagesFetched} mensajes revisados, ${totalCount} paquetes encontrados...`);
 
       if (totalCount >= maxPackagesToFind) {
         console.log(`[HISTÓRICO] Límite de ${maxPackagesToFind} paquetes alcanzado. Deteniendo escaneo.`);
-        break; 
+        break;
       }
 
       if (foundInThisBatch) {
-        messagesSinceLastFind = 0; 
+        messagesSinceLastFind = 0;
       } else {
-        messagesSinceLastFind += messages.size; 
-      }
-      
-      if (messagesSinceLastFind >= maxStaleMessages) {
-        console.log(`[HISTÓRICO] No se encontraron paquetes en los últimos ${maxStaleMessages} mensajes. Deteniendo escaneo.`);
-        break; 
+        messagesSinceLastFind += messages.size;
       }
 
-      await new Promise(resolve => setTimeout(resolve, 500)); 
+      if (messagesSinceLastFind >= maxStaleMessages) {
+        console.log(`[HISTÓRICO] No se encontraron paquetes en los últimos ${maxStaleMessages} mensajes. Deteniendo escaneo.`);
+        break;
+      }
+
+      await new Promise(resolve => setTimeout(resolve, 500));
     }
 
     console.log(`[HISTÓRICO] ✅ Escaneo completado. Total de paquetes encontrados: ${totalCount}`);
@@ -219,7 +217,7 @@ async function backfillStorePackages(channelId, guildId) {
 
   } catch (err) {
     console.error(`[HISTÓRICO] ❌ Error durante el escaneo:`, err);
-    if (err.code === 50013) { 
+    if (err.code === 50013) {
       console.error(`[HISTÓRICO] ❌ El bot no tiene permiso para leer el historial de mensajes en este canal.`);
     }
   }
@@ -248,11 +246,11 @@ const postRankingMessage = async () => {
       new ButtonBuilder()
         .setCustomId('refresh_ranking')
         .setLabel('🔄 Actualizar ahora')
-        .setStyle(ButtonStyle.Primary), 
+        .setStyle(ButtonStyle.Primary),
       new ButtonBuilder()
         .setCustomId('view_full_ranking')
         .setLabel('➡️ Ver más')
-        .setStyle(ButtonStyle.Secondary) 
+        .setStyle(ButtonStyle.Secondary)
     );
 
     if (!rankingMessage) {
@@ -292,7 +290,7 @@ client.once(Events.ClientReady, async () => {
 });
 
 
-// --- ¡BLOQUE CON LOS LOGS DE DEBUG! ---
+// --- ¡BLOQUE CON LA CORRECCIÓN DE PUNTOS/COMAS! ---
 client.on(Events.MessageCreate, (message) => {
   // Asegúrate que solo lee el canal correcto
   if (message.channel.id === process.env.CHANNER_ID && message.webhookId && message.embeds?.length > 0) {
@@ -303,40 +301,50 @@ client.on(Events.MessageCreate, (message) => {
     if (!guildId) return console.warn('❌ No se pudo obtener el ID del servidor');
 
     // --- DEBUG: Loguea la descripción exacta ---
-    console.log('[DEBUG] Procesando descripción:', JSON.stringify(description)); 
+    console.log('[DEBUG] Procesando descripción:', JSON.stringify(description));
     // ---
 
     // --- ACCIÓN 1: PUNTOS DE USUARIO (SUMA) ---
-    const matchUsuario = description.match(/\(([^)]+) ha conseguido (\d+) puntos[^)]*\)/si);
-    
+
+    // --- ¡REGEX CORREGIDA! ---
+    // Cambiamos (\d+) por ([\d,.]+) para aceptar puntos o comas
+    const matchUsuario = description.match(/\(([^)]+) ha conseguido ([\d,.]+) puntos[^)]*\)/si);
+    // ---
+
     // --- DEBUG: Loguea el resultado del match ---
     console.log('[DEBUG] Resultado de matchUsuario:', matchUsuario);
     // ---
 
     if (matchUsuario) {
       const usuario = matchUsuario[1].trim();
-      const puntos = parseInt(matchUsuario[2]);
 
-      // --- DEBUG: Loguea los datos extraídos ---
-      console.log(`[DEBUG] Usuario extraído: "${usuario}", Puntos extraídos: ${puntos}`);
+      // --- ¡LIMPIEZA DEL NÚMERO AÑADIDA! ---
+      const puntosStr = matchUsuario[2];
+      const puntosLimpio = puntosStr.replace(/[.,]/g, '');
+      const puntos = parseInt(puntosLimpio);
       // ---
 
-      pool.query(`
-        INSERT INTO puntos (guild, usuario, puntos)
-        VALUES ($1, $2, $3)
-        ON CONFLICT (guild, usuario)
-        DO UPDATE SET puntos = puntos.puntos + $3
-      `, [guildId, usuario, puntos], (err) => {
-        if (err) {
-            // --- DEBUG: Loguea errores de DB específicos ---
-            console.error(`❌ Error al guardar puntos para ${usuario}:`, err);
-            // ---
-        } else {
-            console.log(`🟢 ${usuario} ganó ${puntos} puntos`);
-        }
-      });
+      // --- DEBUG: Loguea los datos extraídos ---
+      console.log(`[DEBUG] Usuario extraído: "${usuario}", Puntos extraídos (limpio): ${puntos}`);
+      // ---
+
+      if (isNaN(puntos)) {
+          console.error(`[ERROR] No se pudo convertir "${puntosStr}" a número después de limpiar.`);
+      } else {
+          pool.query(`
+            INSERT INTO puntos (guild, usuario, puntos)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (guild, usuario)
+            DO UPDATE SET puntos = puntos.puntos + $3
+          `, [guildId, usuario, puntos], (err) => {
+            if (err) {
+                console.error(`❌ Error al guardar puntos para ${usuario}:`, err);
+            } else {
+                console.log(`🟢 ${usuario} ganó ${puntos} puntos`);
+            }
+          });
+      }
     } else {
-        // Añadimos un aviso si no encuentra al usuario
         console.warn('[WARN] No se encontró patrón de puntos de usuario en la descripción.');
     }
 
@@ -357,13 +365,13 @@ client.on(Events.MessageCreate, (message) => {
     }
 
     // --- ACCIÓN 3: PAQUETES DE TIENDA (SUMA 1) ---
-    const matchTienda = description.match(/Tienda de Almas/i); 
+    const matchTienda = description.match(/Tienda de Almas/i);
     if (matchTienda) {
       pool.query(`
         INSERT INTO clan_stats (guild, paquetes_tienda)
         VALUES ($1, 1)
         ON CONFLICT (guild)
-        DO UPDATE SET 
+        DO UPDATE SET
           paquetes_tienda = clan_stats.paquetes_tienda + 1
       `, [guildId], (err) => {
         if (err) console.error('❌ Error al guardar paquete de tienda:', err);
@@ -372,7 +380,7 @@ client.on(Events.MessageCreate, (message) => {
     }
   }
 });
-// --- FIN DEL BLOQUE CON LOGS ---
+// --- FIN DEL BLOQUE CON CORRECCIÓN ---
 
 
 client.on(Events.InteractionCreate, async (interaction) => {
@@ -411,7 +419,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         'SELECT usuario, puntos FROM puntos WHERE guild = $1 ORDER BY puntos DESC LIMIT $2 OFFSET $3',
         [interaction.guild.id, pageSize, offset]
       );
-      
+
       const pageRows = result.rows;
 
       const lines = pageRows.map((row, i) => {
@@ -461,8 +469,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
   // Comando /rankclan
   if (interaction.isChatInputCommand() && interaction.commandName === 'rankclan') {
-    await interaction.deferReply(); 
-    
+    await interaction.deferReply();
+
     const pageSize = 10;
     let currentPage = 0;
 
@@ -473,7 +481,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const fetchAndDisplay = async (page) => {
       try {
         const offset = page * pageSize;
-        
+
         const result = await pool.query(
           'SELECT usuario, puntos FROM puntos WHERE guild = $1 ORDER BY puntos DESC LIMIT $2 OFFSET $3',
           [interaction.guild.id, pageSize, offset]
@@ -540,7 +548,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 (async () => {
   try {
     console.log('Conectando a la base de datos...');
-    
+
     await pool.query(`
       CREATE TABLE IF NOT EXISTS puntos (
         guild TEXT,
@@ -555,7 +563,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       CREATE TABLE IF NOT EXISTS clan_stats (
         guild TEXT PRIMARY KEY,
         total_puntos BIGINT DEFAULT 0,
-        paquetes_tienda INTEGER DEFAULT 0 
+        paquetes_tienda INTEGER DEFAULT 0
       )
     `);
     console.log('✅ Tabla "clan_stats" lista');
@@ -565,12 +573,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
       ADD COLUMN IF NOT EXISTS paquetes_tienda INTEGER DEFAULT 0
     `);
     console.log('✅ Columna "paquetes_tienda" asegurada en clan_stats');
-    
+
     console.log('Iniciando sesión en Discord...');
     await client.login(process.env.DISCORD_TOKEN);
 
   } catch (err) {
     console.error('❌ Error fatal durante el inicio:', err);
-    process.exit(1); 
+    process.exit(1);
   }
 })();
