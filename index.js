@@ -1,8 +1,8 @@
 const {
   Client, GatewayIntentBits, Partials, Events, REST, Routes,
   SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle,
-  EmbedBuilder, MessageFlags, ModalBuilder, TextInputBuilder, // Nuevos
-  TextInputStyle, PermissionsBitField // Nuevos
+  EmbedBuilder, MessageFlags, ModalBuilder, TextInputBuilder,
+  TextInputStyle, PermissionsBitField
 } = require('discord.js');
 const { Pool } = require('pg');
 require('dotenv').config();
@@ -17,70 +17,26 @@ function createProgressBar(value, maxValue, size = 10) {
   return `\`[${filled.repeat(progress)}${empty.repeat(size - progress)}]\``;
 }
 
-/**
- * Obtiene mensajes entre dos IDs específicos (más nuevos primero).
- * NOTA: Discord API no soporta "between", así que leemos "after" start y paramos en end.
- */
 async function fetchMessagesBetween(channel, startId, endId) {
-  let allMessages = [];
-  let lastId = startId; // Empezamos a buscar DESPUÉS del mensaje inicial del evento
-
-  console.log(`[fetchMessagesBetween] Buscando mensajes DESPUÉS de ${startId} hasta ANTES o IGUAL a ${endId}`);
-
-  try {
-    while (true) {
-      // Usamos 'after' para obtener mensajes MÁS NUEVOS que lastId
-      // Los mensajes vienen ordenados del más viejo al más nuevo en la colección
-      const messages = await channel.messages.fetch({ limit: 100, after: lastId });
-
-      if (messages.size === 0) {
-        console.log(`[fetchMessagesBetween] No se encontraron más mensajes después de ${lastId}.`);
-        break; // No hay más mensajes nuevos
-      }
-
-      let reachedEnd = false;
-      // Iteramos sobre los mensajes (vienen del más viejo al más nuevo en este batch)
-      for (const msg of messages.values()) {
-         // Comparamos IDs como BigInts
-        if (BigInt(msg.id) <= BigInt(endId)) {
-          allMessages.push(msg); // Añadimos el mensaje si está dentro del rango
-        } else {
-          // Si un mensaje es MÁS NUEVO que endId, ya no necesitamos seguir
-          console.log(`[fetchMessagesBetween] Mensaje ${msg.id} es más nuevo que ${endId}. Deteniendo batch.`);
-          reachedEnd = true;
-          break; // Salimos del bucle for...of
+    let allMessages = []; let lastId = startId;
+    console.log(`[fetchMessagesBetween] Buscando mensajes DESPUÉS de ${startId} hasta ANTES o IGUAL a ${endId}`);
+    try {
+        while (true) {
+            const messages = await channel.messages.fetch({ limit: 100, after: lastId });
+            if (messages.size === 0) { console.log(`[fetchMessagesBetween] No se encontraron más mensajes.`); break; }
+            let reachedEnd = false;
+            messages.forEach(msg => { if (BigInt(msg.id) <= BigInt(endId)) allMessages.push(msg); else reachedEnd = true; });
+            lastId = messages.first().id; console.log(`[fetchMessagesBetween] ... ${allMessages.length} recopilados. Último ID: ${lastId}`);
+            if (reachedEnd) { console.log(`[fetchMessagesBetween] ID final (${endId}) alcanzado.`); break; }
+            if (allMessages.length > 10000) { console.warn('[fetchMessagesBetween] Límite de seguridad alcanzado.'); break; }
+            await new Promise(resolve => setTimeout(resolve, 500));
         }
-      }
-
-      // El ID más nuevo de este batch será el 'after' para la siguiente búsqueda
-      lastId = messages.first().id;
-
-      console.log(`[fetchMessagesBetween] ... ${allMessages.length} mensajes recopilados. Último ID procesado en batch: ${lastId}`);
-
-      if (reachedEnd) {
-          console.log(`[fetchMessagesBetween] Se alcanzó o superó el ID final (${endId}). Deteniendo búsqueda.`);
-          break; // Salimos del while si encontramos mensajes más allá del final
-      }
-
-      // Parada de seguridad por si algo va mal
-      if (allMessages.length > 10000) { // Limita a 10k mensajes por si acaso
-          console.warn('[fetchMessagesBetween] Límite de seguridad de 10k mensajes alcanzado.');
-          break;
-      }
-
-      await new Promise(resolve => setTimeout(resolve, 500)); // Pausa
-    }
-  } catch (error) {
-      console.error('[fetchMessagesBetween] Error al buscar mensajes:', error);
-  }
-
-  console.log(`[fetchMessagesBetween] Finalizado. Total de mensajes en rango: ${allMessages.length}`);
-  // Devolvemos los mensajes ordenados como los encontramos (más viejo a más nuevo en el rango)
-  return allMessages;
+    } catch (error) { console.error('[fetchMessagesBetween] Error:', error); }
+    console.log(`[fetchMessagesBetween] Finalizado. Total: ${allMessages.length}`); return allMessages;
 }
 
 
-// --- Configuración de Base de Datos y Cliente Discord ---
+// --- Configuración DB y Cliente ---
 
 const pool = new Pool({
   host: process.env.PGHOST, user: process.env.PGUSER, password: process.env.PGPASSWORD,
@@ -100,22 +56,22 @@ const commands = [
     .setDescription('Muestra el ranking de los miembros con más puntos')
     .toJSON(),
   new SlashCommandBuilder()
-      .setName('crear-evento')
-      .setDescription('[Admin] Crea un anuncio para un nuevo evento del clan.')
-      .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator)
-      .toJSON(),
+    .setName('crear-evento')
+    .setDescription('[Admin] Crea un anuncio para un nuevo evento del clan.')
+    .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator)
+    .toJSON(),
   new SlashCommandBuilder()
     .setName('calcular-evento-ids')
     .setDescription('[Admin] Calcula el ranking del evento basado en IDs de mensaje.')
     .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator)
-    .addStringOption(option => option.setName('start_id').setDescription('ID del mensaje INMEDIATAMENTE ANTERIOR al inicio').setRequired(true))
+    .addStringOption(option => option.setName('start_id').setDescription('ID del primer mensaje del evento').setRequired(true))
     .addStringOption(option => option.setName('end_id').setDescription('ID del último mensaje del evento').setRequired(true))
     .toJSON(),
 ];
 
 let rankingMessage = null;
 
-// --- Funciones Principales del Bot ---
+// --- Funciones Principales ---
 
 async function buildRankingEmbed(guild) {
     const resultUsuarios = await pool.query('SELECT usuario, puntos FROM puntos WHERE guild = $1 ORDER BY puntos DESC LIMIT 10', [guild.id]);
@@ -174,21 +130,21 @@ async function backfillStorePackages(channelId, guildId) {
     } catch (err) { console.error(`[HISTÓRICO] ❌ Error:`, err); if (err.code === 50013) console.error(`[HISTÓRICO] ❌ Sin permiso para leer historial.`); }
 }
 
-/**
- * Procesa un solo mensaje de webhook para extraer y guardar puntos.
- */
 async function processWebhookMessage(message) {
     if (!message.guild?.id || !message.webhookId || !message.embeds?.length > 0) return;
     const embed = message.embeds[0]; const description = embed.description || embed.title || ''; const guildId = message.guild.id;
+    // console.log('[DEBUG] Procesando descripción:', JSON.stringify(description)); // DEBUG
     const matchUsuario = description.match(/\(([^)]+) ha conseguido ([\d,.]+) puntos[^)]*\)/si);
+    // console.log('[DEBUG] Resultado de matchUsuario:', matchUsuario); // DEBUG
     if (matchUsuario) {
         const usuario = matchUsuario[1].trim(); const puntosStr = matchUsuario[2];
         const puntosLimpio = puntosStr.replace(/[.,]/g, ''); const puntos = parseInt(puntosLimpio);
+        // console.log(`[DEBUG] Usuario extraído: "${usuario}", Puntos extraídos (limpio): ${puntos}`); // DEBUG
         if (!isNaN(puntos)) {
             try { await pool.query(`INSERT INTO puntos (guild, usuario, puntos) VALUES ($1, $2, $3) ON CONFLICT (guild, usuario) DO UPDATE SET puntos = puntos.puntos + $3`, [guildId, usuario, puntos]); console.log(`[PROCESS] 🟢 ${usuario} ganó ${puntos} puntos (ID: ${message.id})`); }
-            catch (err) { console.error(`[PROCESS] ❌ Error al guardar puntos para ${usuario}:`, err); }
+            catch (err) { console.error(`[PROCESS] ❌ Error al guardar puntos para ${usuario}:`, err); } // DEBUG
         } else { console.error(`[PROCESS] [ERROR] No se pudo convertir "${puntosStr}" a número (ID: ${message.id})`); }
-    }
+    } else { /* console.warn('[WARN] No se encontró patrón de puntos de usuario en la descripción.'); */ } // DEBUG Comentado temporalmente
     const matchTotal = description.match(/ahora tiene\s+([0-9,.]+)\s+puntos de experiencia/si);
     if (matchTotal) {
         const totalPuntos = BigInt(matchTotal[1].replace(/[,.]/g, ''));
@@ -202,9 +158,6 @@ async function processWebhookMessage(message) {
     }
 }
 
-/**
- * Busca y procesa mensajes nuevos desde el último mensaje conocido.
- */
 async function syncRecentPoints(channelId, guildId) {
     console.log(`[SYNC] 🚀 Iniciando sincronización...`); let lastProcessedId = process.env.RESET_MESSAGE_ID;
     try {
@@ -222,7 +175,7 @@ async function syncRecentPoints(channelId, guildId) {
             if (newMessages.length > 1000) { console.warn('[SYNC] Límite de seguridad alcanzado.'); break; } await new Promise(resolve => setTimeout(resolve, 500));
         }
         if (newMessages.length > 0) {
-            console.log(`[SYNC] Procesando ${newMessages.length} mensajes nuevos...`); for (const msg of newMessages.reverse()) await processWebhookMessage(msg); // Procesamos del más viejo al más nuevo
+            console.log(`[SYNC] Procesando ${newMessages.length} mensajes nuevos...`); for (const msg of newMessages.reverse()) await processWebhookMessage(msg);
             await pool.query(`UPDATE clan_stats SET last_processed_message_id = $1 WHERE guild = $2`, [newestMessageIdInSync, guildId]); console.log(`[SYNC] ✅ Último ID procesado actualizado en DB a: ${newestMessageIdInSync}`);
         } else console.log(`[SYNC] ✅ No hubo mensajes nuevos.`);
     } catch (err) { console.error(`[SYNC] ❌ Error:`, err); }
@@ -298,75 +251,72 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await fetchAndDisplay(currentPage); const collector = interaction.channel.createMessageComponentCollector({ filter: i => i.user.id === interaction.user.id && ['prev_page_cmd', 'next_page_cmd'].includes(i.customId), time: 60_000 }); collector.on('collect', async i => { if (i.customId === 'prev_page_cmd') currentPage--; if (i.customId === 'next_page_cmd') currentPage++; await i.deferUpdate(); await fetchAndDisplay(currentPage); }); collector.on('end', () => interaction.editReply({ components: [] }).catch(() => {}));
     }
 
-    // ¡NUEVO COMANDO! /crear-evento
+    // Comando /crear-evento (Sin campo Tipo, con Agradecimientos)
     if (interaction.commandName === 'crear-evento') {
       if (!interaction.memberPermissions.has(PermissionsBitField.Flags.Administrator)) {
-        return interaction.reply({ content: '❌ Solo los administradores pueden crear eventos.', flags: [MessageFlags.Ephemeral] });
+        return interaction.reply({ content: '❌ Solo admins.', flags: [MessageFlags.Ephemeral] });
       }
       const modal = new ModalBuilder().setCustomId('evento-modal').setTitle('Crear Nuevo Evento del Clan');
-      const tipoEventoInput = new TextInputBuilder().setCustomId('tipoEvento').setLabel("🔥 Tipo de Evento").setStyle(TextInputStyle.Short).setPlaceholder('Ej: Torneo PvP, Concurso Construcción').setRequired(true);
-      const comienzoInput = new TextInputBuilder().setCustomId('comienzo').setLabel("📅 Comienzo (Día y Hora)").setStyle(TextInputStyle.Short).setPlaceholder('Ej: Viernes 10 Nov 20:00h').setRequired(true);
-      const terminaInput = new TextInputBuilder().setCustomId('termina').setLabel("📅 Termina (Día y Hora)").setStyle(TextInputStyle.Short).setPlaceholder('Ej: Domingo 12 Nov 23:59h').setRequired(true);
-      const premiosInput = new TextInputBuilder().setCustomId('premios').setLabel("🏅 Ganadores y Premios").setStyle(TextInputStyle.Paragraph).setPlaceholder('Ej:\n🥇 1er Puesto: Premio A\n🥈 2do Puesto: Premio B\n🥉 3er Puesto: Premio C').setRequired(true);
-      const descripcionInput = new TextInputBuilder().setCustomId('descripcion').setLabel("📜 Descripción del Evento").setStyle(TextInputStyle.Paragraph).setPlaceholder('Explica las reglas, qué hacer, dónde, etc.').setRequired(true);
-      const agradecimientosInput = new TextInputBuilder().setCustomId('agradecimientos').setLabel("🙏 Agradecimientos a").setStyle(TextInputStyle.Short).setPlaceholder('Ej: @Admin, @Donador (Opcional)').setRequired(false);
-      modal.addComponents( new ActionRowBuilder().addComponents(tipoEventoInput), new ActionRowBuilder().addComponents(comienzoInput), new ActionRowBuilder().addComponents(terminaInput), new ActionRowBuilder().addComponents(premiosInput), new ActionRowBuilder().addComponents(descripcionInput), new ActionRowBuilder().addComponents(agradecimientosInput) );
+      const comienzoInput = new TextInputBuilder().setCustomId('comienzo').setLabel("📅 Comienzo").setStyle(TextInputStyle.Short).setPlaceholder('Ej: Viernes 10 Nov 20:00h').setRequired(true);
+      const terminaInput = new TextInputBuilder().setCustomId('termina').setLabel("📅 Termina").setStyle(TextInputStyle.Short).setPlaceholder('Ej: Domingo 12 Nov 23:59h').setRequired(true);
+      const premiosInput = new TextInputBuilder().setCustomId('premios').setLabel("🏅 Premios").setStyle(TextInputStyle.Paragraph).setPlaceholder('Ej:\n🥇 1ro: ...\n🥈 2do: ...').setRequired(true);
+      const descripcionInput = new TextInputBuilder().setCustomId('descripcion').setLabel("📜 Descripción").setStyle(TextInputStyle.Paragraph).setPlaceholder('Reglas, qué hacer, dónde...').setRequired(true);
+      const agradecimientosInput = new TextInputBuilder().setCustomId('agradecimientos').setLabel("🙏 Agradecimientos").setStyle(TextInputStyle.Short).setPlaceholder('Ej: @Admin (Opcional)').setRequired(false);
+      modal.addComponents(
+        new ActionRowBuilder().addComponents(comienzoInput), new ActionRowBuilder().addComponents(terminaInput),
+        new ActionRowBuilder().addComponents(premiosInput), new ActionRowBuilder().addComponents(descripcionInput),
+        new ActionRowBuilder().addComponents(agradecimientosInput)
+      );
       await interaction.showModal(modal);
-    }
+    } // Fin /crear-evento
 
-     // ¡NUEVO COMANDO! /calcular-evento-ids
+    // Comando /calcular-evento-ids
     if (interaction.commandName === 'calcular-evento-ids') {
         if (!interaction.memberPermissions.has(PermissionsBitField.Flags.Administrator)) return interaction.reply({ content: '❌ No tienes permisos.', flags: [MessageFlags.Ephemeral] });
         const startId = interaction.options.getString('start_id'); const endId = interaction.options.getString('end_id'); const channelId = process.env.CHANNER_ID;
-        await interaction.reply({ content: `⏳ Calculando evento entre mensajes INMEDIATAMENTE DESPUÉS de ${startId} y hasta ${endId}...`, flags: [MessageFlags.Ephemeral] });
+        await interaction.reply({ content: `⏳ Calculando evento entre ${startId} y ${endId}...`, flags: [MessageFlags.Ephemeral] });
         try {
             const channel = await client.channels.fetch(channelId); if (!channel || !channel.messages) throw new Error('Canal no encontrado.');
             await pool.query('TRUNCATE TABLE puntos_evento_halloween'); console.log('[EVENT CALC] Tabla histórica vaciada.');
-            // Usamos la función fetchMessagesBetween
             const messagesInRange = await fetchMessagesBetween(channel, startId, endId); if (messagesInRange.length === 0) return interaction.editReply({ content: '⚠️ No se encontraron mensajes.' });
             const pointsMap = new Map();
-            // Procesamos los mensajes (vienen del más viejo al más nuevo)
             messagesInRange.forEach(msg => { if (msg.webhookId && msg.embeds?.length > 0) { const description = msg.embeds[0].description || msg.embeds[0].title || ''; const matchUsuario = description.match(/\(([^)]+) ha conseguido ([\d,.]+) puntos[^)]*\)/si); if (matchUsuario) { const usuario = matchUsuario[1].trim(); const puntosStr = matchUsuario[2]; const puntosLimpio = puntosStr.replace(/[.,]/g, ''); const puntos = parseInt(puntosLimpio); if (!isNaN(puntos)) { const currentPoints = pointsMap.get(usuario) || 0; pointsMap.set(usuario, currentPoints + puntos); }}}});
             if (pointsMap.size > 0) { const insertPromises = []; for (const [usuario, puntos] of pointsMap.entries()) insertPromises.push(pool.query(`INSERT INTO puntos_evento_halloween (guild, usuario, puntos) VALUES ($1, $2, $3)`, [interaction.guild.id, usuario, puntos])); await Promise.all(insertPromises); console.log(`[EVENT CALC] ${pointsMap.size} usuarios guardados.`); await interaction.editReply({ content: `✅ ¡Cálculo completado! ${pointsMap.size} usuarios guardados.` }); }
             else await interaction.editReply({ content: '✅ Cálculo completado, sin puntos encontrados.' });
         } catch (error) { console.error('[EVENT CALC] Error:', error); await interaction.editReply({ content: `❌ Error: ${error.message}` }); }
-    } // Fin comando /calcular-evento-ids
+    } // Fin /calcular-evento-ids
 
-  } // Fin de isChatInputCommand()
+  } // Fin isChatInputCommand()
 
 
-  // --- ¡NUEVO BLOQUE PARA MANEJAR EL MODAL! ---
+  // --- MANEJO DEL MODAL ---
   if (interaction.isModalSubmit()) {
     if (interaction.customId === 'evento-modal') {
-      const tipoEvento = interaction.fields.getTextInputValue('tipoEvento');
       const comienzo = interaction.fields.getTextInputValue('comienzo');
       const termina = interaction.fields.getTextInputValue('termina');
       const premios = interaction.fields.getTextInputValue('premios');
       const descripcion = interaction.fields.getTextInputValue('descripcion');
       const agradecimientos = interaction.fields.getTextInputValue('agradecimientos');
-
       const eventEmbed = new EmbedBuilder()
-        .setColor('#FF5733')
-        .setTitle('⚔️ ¡Nuevo Evento del Clan! ⚔️')
+        .setColor('#FF5733').setTitle('⚔️ ¡Nuevo Evento del Clan! ⚔️')
         .setDescription(`@everyone\n¡Atención, Clan! ¡Se viene un nuevo evento para celebrar esta Temporada de Clanes!\nPreparen sus picos, espadas y bloques. ¡Es hora de demostrar quién manda! 🏆`)
         .addFields(
-          { name: '🔥 TIPO DE EVENTO', value: tipoEvento },
           { name: '📅 FECHAS', value: `**Comienzo:** ${comienzo}\n**Termina:** ${termina}` },
           { name: '📜 DESCRIPCIÓN', value: descripcion },
           { name: '🏅 GANADORES Y PREMIOS', value: premios }
-        )
-        .setTimestamp();
+        ).setTimestamp();
       if (agradecimientos && agradecimientos.trim() !== '') eventEmbed.addFields({ name: '🙏 AGRADECIMIENTOS A', value: agradecimientos });
-
       try {
         const announcementChannel = await client.channels.fetch(process.env.RANKING_CHANNEL_ID);
         if (announcementChannel) {
-          await announcementChannel.send({ content: '@everyone', embeds: [eventEmbed] });
-          await interaction.reply({ content: '✅ ¡Anuncio del evento publicado con éxito!', flags: [MessageFlags.Ephemeral] });
-        } else await interaction.reply({ content: '❌ No se pudo encontrar el canal de anuncios.', flags: [MessageFlags.Ephemeral] });
-      } catch (error) { console.error("Error al enviar anuncio:", error); await interaction.reply({ content: '❌ Ocurrió un error.', flags: [MessageFlags.Ephemeral] }); }
+            // await announcementChannel.send({ content: '@everyone', embeds: [eventEmbed] }); // Línea original comentada
+            await announcementChannel.send({ embeds: [eventEmbed] }); // SIN el content para probar
+            await interaction.reply({ content: '✅ ¡Anuncio publicado!', flags: [MessageFlags.Ephemeral] });
+        }
+        else { await interaction.reply({ content: '❌ Canal de anuncios no encontrado.', flags: [MessageFlags.Ephemeral] }); }
+      } catch (error) { console.error("Error enviando anuncio:", error); await interaction.reply({ content: '❌ Error publicando.', flags: [MessageFlags.Ephemeral] }); }
     }
-  } // Fin if interaction.isModalSubmit()
+  } // Fin isModalSubmit()
 
 
   // --- Lógica de Botones ---
@@ -374,7 +324,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.customId === 'refresh_ranking') { await interaction.deferReply({ flags: [MessageFlags.Ephemeral] }); const embed = await buildRankingEmbed(interaction.guild); if (rankingMessage) { await rankingMessage.edit({ embeds: [embed] }); await interaction.editReply({ content: '✅ Ranking actualizado.' }); } else { await interaction.editReply({ content: '❌ No se pudo encontrar el mensaje.' }); } return; }
     if (interaction.customId === 'view_full_ranking') { await interaction.deferReply({ flags: [MessageFlags.Ephemeral] }); const pageSize = 10; let currentPage = 0; const totalResult = await pool.query('SELECT COUNT(*) FROM puntos WHERE guild = $1', [interaction.guild.id]); const totalRows = parseInt(totalResult.rows[0].count); const totalPages = Math.ceil(totalRows / pageSize) || 1; const displayPage = async (page, interactionRef) => { const offset = page * pageSize; const result = await pool.query('SELECT usuario, puntos FROM puntos WHERE guild = $1 ORDER BY puntos DESC LIMIT $2 OFFSET $3', [interactionRef.guild.id, pageSize, offset]); const lines = result.rows.map((row, i) => `${offset + i + 1}. **${row.usuario}** — ${row.puntos} puntos`); const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('prev_page_full').setLabel('⬅️').setStyle(ButtonStyle.Secondary).setDisabled(page === 0), new ButtonBuilder().setCustomId('next_page_full').setLabel('➡️').setStyle(ButtonStyle.Secondary).setDisabled(page >= totalPages - 1)); await interactionRef.editReply({ content: `🏆 **Ranking completo (Pág ${page + 1}/${totalPages}):**\n\n${lines.join('\n') || 'N/A'}`, components: [row] }); }; await displayPage(currentPage, interaction); const collector = interaction.channel.createMessageComponentCollector({ filter: i => i.user.id === interaction.user.id && ['prev_page_full', 'next_page_full'].includes(i.customId), time: 60_000 }); collector.on('collect', async i => { if (i.customId === 'prev_page_full') currentPage--; if (i.customId === 'next_page_full') currentPage++; await i.deferUpdate(); await displayPage(currentPage, interaction); }); collector.on('end', () => interaction.editReply({ components: [] }).catch(() => {})); return; }
     if (interaction.customId === 'view_event_ranking') { await interaction.deferReply({ flags: [MessageFlags.Ephemeral] }); const pageSize = 10; let currentPage = 0; const totalResult = await pool.query('SELECT COUNT(*) FROM puntos_evento_halloween WHERE guild = $1', [interaction.guild.id]); const totalRows = parseInt(totalResult.rows[0].count); const totalPages = Math.ceil(totalRows / pageSize) || 1; const displayEventPage = async (page, interactionRef) => { const offset = page * pageSize; const result = await pool.query('SELECT usuario, puntos FROM puntos_evento_halloween WHERE guild = $1 ORDER BY puntos DESC LIMIT $2 OFFSET $3', [interactionRef.guild.id, pageSize, offset]); const lines = result.rows.map((row, i) => `${offset + i + 1}. **${row.usuario}** — ${row.puntos} puntos`); const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('prev_page_event').setLabel('⬅️').setStyle(ButtonStyle.Secondary).setDisabled(page === 0), new ButtonBuilder().setCustomId('next_page_event').setLabel('➡️').setStyle(ButtonStyle.Secondary).setDisabled(page >= totalPages - 1)); await interactionRef.editReply({ content: `🎃 **Ranking Evento Halloween (Pág ${page + 1}/${totalPages}):**\n\n${lines.join('\n') || 'N/A'}`, components: [row] }); }; await displayEventPage(currentPage, interaction); const collector = interaction.channel.createMessageComponentCollector({ filter: i => i.user.id === interaction.user.id && ['prev_page_event', 'next_page_event'].includes(i.customId), time: 60_000 }); collector.on('collect', async i => { if (i.customId === 'prev_page_event') currentPage--; if (i.customId === 'next_page_event') currentPage++; await i.deferUpdate(); await displayEventPage(currentPage, interaction); }); collector.on('end', () => interaction.editReply({ components: [] }).catch(() => {})); return; }
-  } // Fin de isButton()
+  } // Fin isButton()
 
 }); // Fin InteractionCreate
 
