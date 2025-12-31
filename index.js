@@ -79,7 +79,7 @@ async function buildRankingEmbed(guild) {
     const stats = resultStats.rows[0] || { total_puntos: '0', paquetes_tienda: 0 };
     const topPoints = resultUsuarios.rows.length ? resultUsuarios.rows[0].puntos : 0;
     const embed = new EmbedBuilder()
-        .setAuthor({ name: 'TEMPORADA DE CLANES 🎃 HALLOWEEN' })
+        .setAuthor({ name: 'TEMPORADA DE CLAN | 🎄 NAVIDAD' })
         .setTitle('➥ 🏆 Ranking del Clan')
         .setDescription('\u200B')
         .setColor('#E67E22').setImage(guild.iconURL()).setTimestamp();
