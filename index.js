@@ -1,3 +1,17 @@
+// ==========================================
+// 1. SISTEMA ANTI-DORMIR (KEEP-ALIVE RENDER)
+// ==========================================
+const http = require('http');
+const port = process.env.PORT || 3000;
+
+http.createServer((req, res) => {
+  res.writeHead(200);
+  res.end('El bot esta activo y escuchando!');
+}).listen(port, () => console.log(`🌍 Keep-Alive Server escuchando en puerto ${port}`));
+
+// ==========================================
+// 2. CÓDIGO DEL BOT
+// ==========================================
 const {
   Client, GatewayIntentBits, Partials, Events, REST, Routes,
   SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle,
@@ -25,12 +39,19 @@ async function fetchMessagesBetween(channel, startId, endId) {
         while (true) {
             const messages = await channel.messages.fetch({ limit: 100, after: lastId });
             if (messages.size === 0) { console.log(`[fetchMessagesBetween] No se encontraron más mensajes.`); break; }
+            
             let reachedEnd = false;
-            messages.forEach(msg => { if (BigInt(msg.id) <= BigInt(endId)) allMessages.push(msg); else reachedEnd = true; });
+            messages.forEach(msg => { 
+                if (BigInt(msg.id) <= BigInt(endId)) allMessages.push(msg); 
+                else reachedEnd = true; 
+            });
+            
             lastId = messages.first().id;
             console.log(`[fetchMessagesBetween] ... ${allMessages.length} recopilados. Último ID: ${lastId}`);
+            
             if (reachedEnd) { console.log(`[fetchMessagesBetween] ID final (${endId}) alcanzado.`); break; }
             if (allMessages.length > 10000) { console.warn('[fetchMessagesBetween] Límite de seguridad alcanzado.'); break; }
+            
             await new Promise(resolve => setTimeout(resolve, 500));
         }
     } catch (error) { console.error('[fetchMessagesBetween] Error:', error); }
@@ -38,12 +59,15 @@ async function fetchMessagesBetween(channel, startId, endId) {
     return allMessages;
 }
 
-
 // --- Configuración DB y Cliente ---
 
 const pool = new Pool({
-  host: process.env.PGHOST, user: process.env.PGUSER, password: process.env.PGPASSWORD,
-  database: process.env.PGDATABASE, port: process.env.PGPORT, ssl: { rejectUnauthorized: false }
+  host: process.env.PGHOST, 
+  user: process.env.PGUSER, 
+  password: process.env.PGPASSWORD,
+  database: process.env.PGDATABASE, 
+  port: process.env.PGPORT, 
+  ssl: { rejectUnauthorized: false }
 });
 
 const client = new Client({
@@ -70,12 +94,17 @@ const commands = [
     .addStringOption(option => option.setName('start_id').setDescription('ID del primer mensaje del evento').setRequired(true))
     .addStringOption(option => option.setName('end_id').setDescription('ID del último mensaje del evento').setRequired(true))
     .toJSON(),
-  // --- NUEVO COMANDO AÑADIDO (Mantenido) ---
   new SlashCommandBuilder()
     .setName('calcular-inicio')
     .setDescription('[Admin] Resetea el rastreo desde un ID anterior y sincroniza los puntos perdidos.')
     .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator)
     .addStringOption(option => option.setName('message_id').setDescription('ID del mensaje DESDE donde empezar a contar (exclusivo)').setRequired(true))
+    .toJSON(),
+  // --- NUEVO COMANDO: REINICIAR ---
+  new SlashCommandBuilder()
+    .setName('reiniciar-rank')
+    .setDescription('[Admin] ⚠️ BORRA todos los puntos y reinicia el ranking a cero.')
+    .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator)
     .toJSON(),
 ];
 
@@ -94,7 +123,7 @@ async function buildRankingEmbed(guild) {
         .setTitle('➥ 🏆 Ranking del Clan')
         .setDescription('\u200B')
         .setColor('#E67E22').setImage(guild.iconURL()).setTimestamp();
-    
+        
     if (resultUsuarios.rows.length === 0) { embed.setDescription('No hay datos aún.'); }
     else {
         const medallas = ['🥇', '🥈', '🥉'];
@@ -102,16 +131,15 @@ async function buildRankingEmbed(guild) {
             const rank = medallas[i] || `**${i + 1}.**`;
             return `${rank} **${row.usuario}**\n   \`${row.puntos} pts\` ${createProgressBar(row.puntos, topPoints, 10)}`;
         }).join('\n\n');
+        
         embed.addFields({ name: '➥ Ranking de Miembros', value: rankingLines, inline: false });
         embed.addFields({ name: '\u200B', value: '\u200B', inline: false });
-        
         embed.addFields(
             { name: 'Total del Clan', value: `**\`${BigInt(stats.total_puntos).toLocaleString('es')} pts\`**`, inline: true }
         );
-    } return embed;
+    } 
+    return embed;
 }
-
-// (Función backfillStorePackages ELIMINADA por completo)
 
 async function processWebhookMessage(message) {
     if (!message.guild?.id || !message.webhookId || !message.embeds?.length > 0) return;
@@ -153,11 +181,10 @@ async function processWebhookMessage(message) {
 async function syncRecentPoints(channelId, guildId) {
     console.log(`[SYNC] 🚀 Iniciando sincronización...`); 
     let lastProcessedId = process.env.RESET_MESSAGE_ID;
-    
     try {
         const result = await pool.query('SELECT last_processed_message_id FROM clan_stats WHERE guild = $1', [guildId]);
         if (result.rows.length > 0 && result.rows[0].last_processed_message_id) { 
-            lastProcessedId = result.rows[0].last_processed_message_id; 
+            lastProcessedId = result.rows[0].last_processed_message_id;
             console.log(`[SYNC] Último ID en DB: ${lastProcessedId}`);
         } else { 
             console.log(`[SYNC] Usando RESET_MESSAGE_ID por defecto: ${lastProcessedId}`);
@@ -168,7 +195,7 @@ async function syncRecentPoints(channelId, guildId) {
         const channel = await client.channels.fetch(channelId);
         if (!channel || !channel.messages) { console.error(`[SYNC] ❌ Canal ${channelId} no encontrado.`); return; }
         
-        let newMessages = []; 
+        let newMessages = [];
         let currentLastId = lastProcessedId; 
         let newestMessageIdInSync = lastProcessedId;
         
@@ -181,7 +208,6 @@ async function syncRecentPoints(channelId, guildId) {
                 newMessages.push(msg); 
                 if (BigInt(msg.id) > BigInt(newestMessageIdInSync)) newestMessageIdInSync = msg.id; 
             });
-            
             currentLastId = messages.first().id; 
             console.log(`[SYNC] ... ${newMessages.length} nuevos encontrados. Último ID en batch: ${currentLastId}`);
             
@@ -257,7 +283,30 @@ client.on(Events.InteractionCreate, async (interaction) => {
   // --- Lógica de Comandos Slash ---
   if (interaction.isChatInputCommand()) {
     
-    // --- Lógica del nuevo comando /calcular-inicio ---
+    // --- COMANDO NUEVO: /REINICIAR-RANK ---
+    if (interaction.commandName === 'reiniciar-rank') {
+        if (!interaction.memberPermissions.has(PermissionsBitField.Flags.Administrator)) {
+            return interaction.reply({ content: '❌ No tienes permisos.', flags: [MessageFlags.Ephemeral] });
+        }
+        await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
+        try {
+            // 1. Borrar tabla de puntos de usuario
+            await pool.query('TRUNCATE TABLE puntos');
+            // 2. Resetear estadística global del clan a 0
+            await pool.query('UPDATE clan_stats SET total_puntos = 0');
+            
+            console.log(`[RESET] ⚠️ Ranking purgado manualmente por ${interaction.user.tag}`);
+            
+            await interaction.editReply({ 
+                content: '✅ **¡Ranking reiniciado con éxito!**\n\nLa base de datos está vacía. Ahora puedes usar:\n`/calcular-inicio [ID_DEL_MENSAJE]` para volver a contar los puntos desde un punto específico.' 
+            });
+        } catch (err) {
+            console.error(err);
+            await interaction.editReply({ content: `❌ Error crítico al reiniciar: ${err.message}` });
+        }
+    }
+
+    // --- Lógica del comando /calcular-inicio ---
     if (interaction.commandName === 'calcular-inicio') {
         const startMsgId = interaction.options.getString('message_id');
         const guildId = interaction.guild.id;
@@ -268,35 +317,34 @@ client.on(Events.InteractionCreate, async (interaction) => {
             await pool.query('UPDATE clan_stats SET last_processed_message_id = $1 WHERE guild = $2', [startMsgId, guildId]);
             console.log(`[MANUAL RESET] ID reseteado a ${startMsgId} por ${interaction.user.tag}`);
             
-            await interaction.editReply({ content: `✅ ID establecido a ${startMsgId}. Iniciando resincronización... (Esto puede tardar unos segundos)` });
+            await interaction.editReply({ content: `✅ ID establecido a ${startMsgId}. Iniciando resincronización...` });
             
             await syncRecentPoints(process.env.CHANNER_ID, guildId);
             
             await interaction.editReply({ content: `✅ **Sincronización completada.** El bot ha releído los mensajes desde el ID ${startMsgId} hasta ahora.` });
-
         } catch (err) {
             console.error(err);
             await interaction.editReply({ content: `❌ Error al resetear: ${err.message}` });
         }
     }
-    // ------------------------------------------------
 
     // Comando /rankclan
     if (interaction.commandName === 'rankclan') {
-        await interaction.deferReply(); const pageSize = 10; let currentPage = 0;
+        await interaction.deferReply();
+        const pageSize = 10; let currentPage = 0;
         const totalResult = await pool.query('SELECT COUNT(*) FROM puntos WHERE guild = $1', [interaction.guild.id]);
         const totalRows = parseInt(totalResult.rows[0].count); const totalPages = Math.ceil(totalRows / pageSize) || 1;
         const fetchAndDisplay = async (page) => { 
             try { 
-                const offset = page * pageSize; 
-                const result = await pool.query('SELECT usuario, puntos FROM puntos WHERE guild = $1 ORDER BY puntos DESC LIMIT $2 OFFSET $3', [interaction.guild.id, pageSize, offset]); 
-                if (!result.rows.length) return interaction.editReply({ content: '⚠️ No hay puntos.' }); 
+                const offset = page * pageSize;
+                const result = await pool.query('SELECT usuario, puntos FROM puntos WHERE guild = $1 ORDER BY puntos DESC LIMIT $2 OFFSET $3', [interaction.guild.id, pageSize, offset]);
+                if (!result.rows.length) return interaction.editReply({ content: '⚠️ No hay puntos.' });
                 const lines = result.rows.map((row, i) => `${offset + i + 1}. **${row.usuario}** — ${row.puntos} pts`);
                 const row = new ActionRowBuilder().addComponents(
                     new ButtonBuilder().setCustomId('prev_page_cmd').setLabel('⬅️').setStyle(ButtonStyle.Primary).setDisabled(page === 0), 
                     new ButtonBuilder().setCustomId('next_page_cmd').setLabel('➡️').setStyle(ButtonStyle.Primary).setDisabled(page >= totalPages - 1)
                 );
-                await interaction.editReply({ content: `🏆 **Ranking (Pág ${page + 1}/${totalPages}):**\n\n${lines.join('\n')}`, components: [row] }); 
+                await interaction.editReply({ content: `🏆 **Ranking (Pág ${page + 1}/${totalPages}):**\n\n${lines.join('\n')}`, components: [row] });
             } catch (err) { 
                 console.error(err);
                 if (interaction.replied || interaction.deferred) await interaction.editReply({ content: '❌ Error.', components: [] });
@@ -336,17 +384,18 @@ client.on(Events.InteractionCreate, async (interaction) => {
             const channel = await client.channels.fetch(channelId);
             if (!channel || !channel.messages) throw new Error('Canal no encontrado.');
             
-            // CAMBIO: halloween -> navidad
-            await pool.query('TRUNCATE TABLE puntos_evento_navidad'); console.log('[EVENT CALC] Tabla histórica vaciada.');
+            await pool.query('TRUNCATE TABLE puntos_evento_navidad');
+            console.log('[EVENT CALC] Tabla histórica vaciada.');
             
-            const messagesInRange = await fetchMessagesBetween(channel, startId, endId); if (messagesInRange.length === 0) return interaction.editReply({ content: '⚠️ No se encontraron mensajes.' });
+            const messagesInRange = await fetchMessagesBetween(channel, startId, endId);
+            if (messagesInRange.length === 0) return interaction.editReply({ content: '⚠️ No se encontraron mensajes.' });
             const pointsMap = new Map();
             messagesInRange.forEach(msg => { if (msg.webhookId && msg.embeds?.length > 0) { const description = msg.embeds[0].description || msg.embeds[0].title || ''; const matchUsuario = description.match(/\(([^)]+) ha conseguido ([\d,.]+) puntos[^)]*\)/si);
             if (matchUsuario) { const usuario = matchUsuario[1].trim(); const puntosStr = matchUsuario[2]; const puntosLimpio = puntosStr.replace(/[.,]/g, ''); const puntos = parseInt(puntosLimpio);
             if (!isNaN(puntos)) { const currentPoints = pointsMap.get(usuario) || 0; pointsMap.set(usuario, currentPoints + puntos); }}}});
             
-            // CAMBIO: halloween -> navidad
-            if (pointsMap.size > 0) { const insertPromises = []; for (const [usuario, puntos] of pointsMap.entries()) insertPromises.push(pool.query(`INSERT INTO puntos_evento_navidad (guild, usuario, puntos) VALUES ($1, $2, $3)`, [interaction.guild.id, usuario, puntos]));
+            if (pointsMap.size > 0) { const insertPromises = [];
+            for (const [usuario, puntos] of pointsMap.entries()) insertPromises.push(pool.query(`INSERT INTO puntos_evento_navidad (guild, usuario, puntos) VALUES ($1, $2, $3)`, [interaction.guild.id, usuario, puntos]));
             await Promise.all(insertPromises); console.log(`[EVENT CALC] ${pointsMap.size} usuarios guardados.`); await interaction.editReply({ content: `✅ ¡Cálculo completado! ${pointsMap.size} usuarios guardados.` });
             }
             else await interaction.editReply({ content: '✅ Cálculo completado, sin puntos encontrados.' });
@@ -390,44 +439,38 @@ client.on(Events.InteractionCreate, async (interaction) => {
   // --- Lógica de Botones ---
   if (interaction.isButton()) {
     if (interaction.customId === 'refresh_ranking') { await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
-        const embed = await buildRankingEmbed(interaction.guild); if (rankingMessage) { await rankingMessage.edit({ embeds: [embed] }); await interaction.editReply({ content: '✅ Ranking actualizado.' });
-        } else { await interaction.editReply({ content: '❌ No se pudo encontrar el mensaje.' }); } return;
+      const embed = await buildRankingEmbed(interaction.guild); if (rankingMessage) { await rankingMessage.edit({ embeds: [embed] }); await interaction.editReply({ content: '✅ Ranking actualizado.' });
+      } else { await interaction.editReply({ content: '❌ No se pudo encontrar el mensaje.' }); } return;
     }
     if (interaction.customId === 'view_full_ranking') { await interaction.deferReply({ flags: [MessageFlags.Ephemeral] }); const pageSize = 10;
-        let currentPage = 0; const totalResult = await pool.query('SELECT COUNT(*) FROM puntos WHERE guild = $1', [interaction.guild.id]);
-        const totalRows = parseInt(totalResult.rows[0].count); const totalPages = Math.ceil(totalRows / pageSize) || 1;
-        const displayPage = async (page, interactionRef) => { const offset = page * pageSize;
-        const result = await pool.query('SELECT usuario, puntos FROM puntos WHERE guild = $1 ORDER BY puntos DESC LIMIT $2 OFFSET $3', [interactionRef.guild.id, pageSize, offset]);
-        const lines = result.rows.map((row, i) => `${offset + i + 1}. **${row.usuario}** — ${row.puntos} puntos`);
-        const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('prev_page_full').setLabel('⬅️').setStyle(ButtonStyle.Secondary).setDisabled(page === 0), new ButtonBuilder().setCustomId('next_page_full').setLabel('➡️').setStyle(ButtonStyle.Secondary).setDisabled(page >= totalPages - 1));
-        await interactionRef.editReply({ content: `🏆 **Ranking completo (Pág ${page + 1}/${totalPages}):**\n\n${lines.join('\n') || 'N/A'}`, components: [row] }); }; await displayPage(currentPage, interaction);
-        const collector = interaction.channel.createMessageComponentCollector({ filter: i => i.user.id === interaction.user.id && ['prev_page_full', 'next_page_full'].includes(i.customId), time: 60_000 });
-        collector.on('collect', async i => { if (i.customId === 'prev_page_full') currentPage--; if (i.customId === 'next_page_full') currentPage++; await i.deferUpdate(); await displayPage(currentPage, interaction); });
-        collector.on('end', () => interaction.editReply({ components: [] }).catch(() => {})); return;
+      let currentPage = 0; const totalResult = await pool.query('SELECT COUNT(*) FROM puntos WHERE guild = $1', [interaction.guild.id]);
+      const totalRows = parseInt(totalResult.rows[0].count); const totalPages = Math.ceil(totalRows / pageSize) || 1;
+      const displayPage = async (page, interactionRef) => { const offset = page * pageSize;
+      const result = await pool.query('SELECT usuario, puntos FROM puntos WHERE guild = $1 ORDER BY puntos DESC LIMIT $2 OFFSET $3', [interactionRef.guild.id, pageSize, offset]);
+      const lines = result.rows.map((row, i) => `${offset + i + 1}. **${row.usuario}** — ${row.puntos} puntos`);
+      const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('prev_page_full').setLabel('⬅️').setStyle(ButtonStyle.Secondary).setDisabled(page === 0), new ButtonBuilder().setCustomId('next_page_full').setLabel('➡️').setStyle(ButtonStyle.Secondary).setDisabled(page >= totalPages - 1));
+      await interactionRef.editReply({ content: `🏆 **Ranking completo (Pág ${page + 1}/${totalPages}):**\n\n${lines.join('\n') || 'N/A'}`, components: [row] }); }; await displayPage(currentPage, interaction);
+      const collector = interaction.channel.createMessageComponentCollector({ filter: i => i.user.id === interaction.user.id && ['prev_page_full', 'next_page_full'].includes(i.customId), time: 60_000 });
+      collector.on('collect', async i => { if (i.customId === 'prev_page_full') currentPage--; if (i.customId === 'next_page_full') currentPage++; await i.deferUpdate(); await displayPage(currentPage, interaction); });
+      collector.on('end', () => interaction.editReply({ components: [] }).catch(() => {})); return;
     }
     if (interaction.customId === 'view_event_ranking') { await interaction.deferReply({ flags: [MessageFlags.Ephemeral] }); const pageSize = 10;
-        
-        // CAMBIO: halloween -> navidad
-        let currentPage = 0; const totalResult = await pool.query('SELECT COUNT(*) FROM puntos_evento_navidad WHERE guild = $1', [interaction.guild.id]);
-        
-        const totalRows = parseInt(totalResult.rows[0].count); const totalPages = Math.ceil(totalRows / pageSize) || 1;
+        let currentPage = 0;
+        const totalResult = await pool.query('SELECT COUNT(*) FROM puntos_evento_navidad WHERE guild = $1', [interaction.guild.id]);
+        const totalRows = parseInt(totalResult.rows[0].count);
+        const totalPages = Math.ceil(totalRows / pageSize) || 1;
         const displayEventPage = async (page, interactionRef) => { const offset = page * pageSize;
-        
-        // CAMBIO: halloween -> navidad
         const result = await pool.query('SELECT usuario, puntos FROM puntos_evento_navidad WHERE guild = $1 ORDER BY puntos DESC LIMIT $2 OFFSET $3', [interactionRef.guild.id, pageSize, offset]);
-        
         const lines = result.rows.map((row, i) => `${offset + i + 1}. **${row.usuario}** — ${row.puntos} puntos`);
         const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('prev_page_event').setLabel('⬅️').setStyle(ButtonStyle.Secondary).setDisabled(page === 0), new ButtonBuilder().setCustomId('next_page_event').setLabel('➡️').setStyle(ButtonStyle.Secondary).setDisabled(page >= totalPages - 1));
-        
-        // CAMBIO: 🎃 -> 🎄 y texto Halloween -> Navidad
-        await interactionRef.editReply({ content: `🎄 **Ranking Evento Navidad (Pág ${page + 1}/${totalPages}):**\n\n${lines.join('\n') || 'N/A'}`, components: [row] }); }; await displayEventPage(currentPage, interaction);
+        await interactionRef.editReply({ content: `🎄 **Ranking Evento Navidad (Pág ${page + 1}/${totalPages}):**\n\n${lines.join('\n') || 'N/A'}`, components: [row] });
+        }; await displayEventPage(currentPage, interaction);
         const collector = interaction.channel.createMessageComponentCollector({ filter: i => i.user.id === interaction.user.id && ['prev_page_event', 'next_page_event'].includes(i.customId), time: 60_000 });
         collector.on('collect', async i => { if (i.customId === 'prev_page_event') currentPage--; if (i.customId === 'next_page_event') currentPage++; await i.deferUpdate(); await displayEventPage(currentPage, interaction); });
         collector.on('end', () => interaction.editReply({ components: [] }).catch(() => {})); return; }
   } // Fin isButton()
 
 });
-
 
 // --- INICIO DEL BOT ---
 (async () => {
@@ -442,7 +485,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
     await pool.query(`ALTER TABLE clan_stats ADD COLUMN IF NOT EXISTS last_processed_message_id TEXT`);
     console.log('✅ Columnas aseguradas en clan_stats');
     
-    // CAMBIO: halloween -> navidad
     await pool.query(`CREATE TABLE IF NOT EXISTS puntos_evento_navidad (guild TEXT, usuario TEXT, puntos INTEGER DEFAULT 0, PRIMARY KEY (guild, usuario))`);
     console.log('✅ Tabla "puntos_evento_navidad" lista');
     
