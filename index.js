@@ -100,10 +100,14 @@ const commands = [
     .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator)
     .addStringOption(option => option.setName('message_id').setDescription('ID del mensaje DESDE donde empezar a contar (exclusivo)').setRequired(true))
     .toJSON(),
-  // --- NUEVO COMANDO: REINICIAR ---
   new SlashCommandBuilder()
     .setName('reiniciar-rank')
     .setDescription('[Admin] ⚠️ BORRA todos los puntos y reinicia el ranking a cero.')
+    .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator)
+    .toJSON(),
+  new SlashCommandBuilder()
+    .setName('evento-temporada')
+    .setDescription('[Admin] Cambia el nombre del evento activo que aparece en el embed del ranking.')
     .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator)
     .toJSON(),
 ];
@@ -114,12 +118,15 @@ let rankingMessage = null;
 
 async function buildRankingEmbed(guild) {
     const resultUsuarios = await pool.query('SELECT usuario, puntos FROM puntos WHERE guild = $1 ORDER BY puntos DESC LIMIT 10', [guild.id]);
-    const resultStats = await pool.query('SELECT total_puntos FROM clan_stats WHERE guild = $1', [guild.id]);
-    const stats = resultStats.rows[0] || { total_puntos: '0' };
+    const resultStats = await pool.query('SELECT total_puntos, temporada_nombre FROM clan_stats WHERE guild = $1', [guild.id]);
+    const stats = resultStats.rows[0] || { total_puntos: '0', temporada_nombre: null };
     const topPoints = resultUsuarios.rows.length ? resultUsuarios.rows[0].puntos : 0;
+
+    // Usar el nombre guardado en DB, o el valor por defecto si no hay ninguno
+    const temporadaNombre = stats.temporada_nombre || '🎄 NAVIDAD';
     
     const embed = new EmbedBuilder()
-        .setAuthor({ name: 'TEMPORADA DE CLAN | 🎄 NAVIDAD' })
+        .setAuthor({ name: `TEMPORADA DE CLAN | ${temporadaNombre}` })
         .setTitle('➥ 🏆 Ranking del Clan')
         .setDescription('\u200B')
         .setColor('#E67E22').setImage(guild.iconURL()).setTimestamp();
@@ -141,14 +148,28 @@ async function buildRankingEmbed(guild) {
     return embed;
 }
 
+// ==========================================
+// FIX: processWebhookMessage con soporte
+// para AMBOS formatos de mensaje:
+//   - CON paréntesis:  (Usuario ha conseguido 10.000 puntos para este clan)
+//   - SIN paréntesis:  Usuario ha conseguido 1.000 puntos para este clan
+// ==========================================
 async function processWebhookMessage(message) {
-    if (!message.guild?.id || !message.webhookId || !message.embeds?.length > 0) return;
+    // FIX: corrección del chequeo de embeds (el original tenía !embeds.length > 0 que no funcionaba bien)
+    if (!message.guild?.id || !message.webhookId || !message.embeds?.length) return;
+
     const embed = message.embeds[0];
     const description = embed.description || embed.title || ''; 
     const guildId = message.guild.id;
 
-    // Detectar Puntos de Usuario
-    const matchUsuario = description.match(/\(([^)]+) ha conseguido ([\d,.]+) puntos[^)]*\)/si);
+    // Detectar Puntos de Usuario - AMBOS FORMATOS
+    // Formato 1 (con paréntesis): (Usuario ha conseguido 10.000 puntos para este clan)
+    const matchConParentesis = description.match(/\(([^)]+?) ha conseguido ([\d,.]+) puntos[^)]*\)/si);
+    // Formato 2 (sin paréntesis): Usuario ha conseguido 1.000 puntos para este clan
+    const matchSinParentesis = description.match(/^[^(\n]*?!\s*([^\n(]+?) ha conseguido ([\d,.]+) puntos/sim);
+
+    const matchUsuario = matchConParentesis || matchSinParentesis;
+
     if (matchUsuario) {
         const usuario = matchUsuario[1].trim();
         const puntosStr = matchUsuario[2];
@@ -157,8 +178,13 @@ async function processWebhookMessage(message) {
         
         if (!isNaN(puntos)) {
             try { 
-                await pool.query(`INSERT INTO puntos (guild, usuario, puntos) VALUES ($1, $2, $3) ON CONFLICT (guild, usuario) DO UPDATE SET puntos = puntos.puntos + $3`, [guildId, usuario, puntos]);
-                console.log(`[PROCESS] 🟢 ${usuario} ganó ${puntos} puntos (ID: ${message.id})`); 
+                await pool.query(
+                    `INSERT INTO puntos (guild, usuario, puntos) VALUES ($1, $2, $3) 
+                     ON CONFLICT (guild, usuario) DO UPDATE SET puntos = puntos.puntos + $3`,
+                    [guildId, usuario, puntos]
+                );
+                const formato = matchConParentesis ? 'con paréntesis' : 'sin paréntesis';
+                console.log(`[PROCESS] 🟢 ${usuario} ganó ${puntos} puntos (formato: ${formato}) (ID: ${message.id})`); 
             }
             catch (err) { console.error(`[PROCESS] ❌ Error al guardar puntos para ${usuario}:`, err); }
         } else { 
@@ -171,7 +197,11 @@ async function processWebhookMessage(message) {
     if (matchTotal) {
         const totalPuntos = BigInt(matchTotal[1].replace(/[,.]/g, ''));
         try { 
-            await pool.query(`INSERT INTO clan_stats (guild, total_puntos) VALUES ($1, $2) ON CONFLICT (guild) DO UPDATE SET total_puntos = $2`, [guildId, totalPuntos]);
+            await pool.query(
+                `INSERT INTO clan_stats (guild, total_puntos) VALUES ($1, $2) 
+                 ON CONFLICT (guild) DO UPDATE SET total_puntos = $2`,
+                [guildId, totalPuntos]
+            );
             console.log(`[PROCESS] 🔵 Total actualizado: ${totalPuntos} (ID: ${message.id})`); 
         }
         catch (err) { console.error('[PROCESS] ❌ Error al guardar puntos totales:', err); }
@@ -283,16 +313,33 @@ client.on(Events.InteractionCreate, async (interaction) => {
   // --- Lógica de Comandos Slash ---
   if (interaction.isChatInputCommand()) {
     
-    // --- COMANDO NUEVO: /REINICIAR-RANK ---
+    // --- COMANDO: /EVENTO-TEMPORADA ---
+    if (interaction.commandName === 'evento-temporada') {
+        if (!interaction.memberPermissions.has(PermissionsBitField.Flags.Administrator)) {
+            return interaction.reply({ content: '❌ No tienes permisos.', flags: [MessageFlags.Ephemeral] });
+        }
+        const modal = new ModalBuilder()
+            .setCustomId('evento-temporada-modal')
+            .setTitle('Cambiar Evento de Temporada');
+        const eventoInput = new TextInputBuilder()
+            .setCustomId('evento_nombre')
+            .setLabel('🏆 Evento activo')
+            .setStyle(TextInputStyle.Short)
+            .setPlaceholder('Ej: 🎄 NAVIDAD  /  ☀️ VERANO  /  🎃 HALLOWEEN')
+            .setMaxLength(50)
+            .setRequired(true);
+        modal.addComponents(new ActionRowBuilder().addComponents(eventoInput));
+        await interaction.showModal(modal);
+    }
+
+    // --- COMANDO: /REINICIAR-RANK ---
     if (interaction.commandName === 'reiniciar-rank') {
         if (!interaction.memberPermissions.has(PermissionsBitField.Flags.Administrator)) {
             return interaction.reply({ content: '❌ No tienes permisos.', flags: [MessageFlags.Ephemeral] });
         }
         await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
         try {
-            // 1. Borrar tabla de puntos de usuario
             await pool.query('TRUNCATE TABLE puntos');
-            // 2. Resetear estadística global del clan a 0
             await pool.query('UPDATE clan_stats SET total_puntos = 0');
             
             console.log(`[RESET] ⚠️ Ranking purgado manualmente por ${interaction.user.tag}`);
@@ -390,17 +437,42 @@ client.on(Events.InteractionCreate, async (interaction) => {
             const messagesInRange = await fetchMessagesBetween(channel, startId, endId);
             if (messagesInRange.length === 0) return interaction.editReply({ content: '⚠️ No se encontraron mensajes.' });
             const pointsMap = new Map();
-            messagesInRange.forEach(msg => { if (msg.webhookId && msg.embeds?.length > 0) { const description = msg.embeds[0].description || msg.embeds[0].title || ''; const matchUsuario = description.match(/\(([^)]+) ha conseguido ([\d,.]+) puntos[^)]*\)/si);
-            if (matchUsuario) { const usuario = matchUsuario[1].trim(); const puntosStr = matchUsuario[2]; const puntosLimpio = puntosStr.replace(/[.,]/g, ''); const puntos = parseInt(puntosLimpio);
-            if (!isNaN(puntos)) { const currentPoints = pointsMap.get(usuario) || 0; pointsMap.set(usuario, currentPoints + puntos); }}}});
+
+            // ==========================================
+            // FIX: mismo doble-formato aplicado al cálculo de eventos
+            // ==========================================
+            messagesInRange.forEach(msg => {
+                if (msg.webhookId && msg.embeds?.length > 0) {
+                    const description = msg.embeds[0].description || msg.embeds[0].title || '';
+
+                    const matchConParentesis = description.match(/\(([^)]+?) ha conseguido ([\d,.]+) puntos[^)]*\)/si);
+                    const matchSinParentesis = description.match(/^[^(\n]*?!\s*([^\n(]+?) ha conseguido ([\d,.]+) puntos/sim);
+                    const matchUsuario = matchConParentesis || matchSinParentesis;
+
+                    if (matchUsuario) {
+                        const usuario = matchUsuario[1].trim();
+                        const puntosStr = matchUsuario[2];
+                        const puntosLimpio = puntosStr.replace(/[.,]/g, '');
+                        const puntos = parseInt(puntosLimpio);
+                        if (!isNaN(puntos)) {
+                            const currentPoints = pointsMap.get(usuario) || 0;
+                            pointsMap.set(usuario, currentPoints + puntos);
+                        }
+                    }
+                }
+            });
             
-            if (pointsMap.size > 0) { const insertPromises = [];
-            for (const [usuario, puntos] of pointsMap.entries()) insertPromises.push(pool.query(`INSERT INTO puntos_evento_navidad (guild, usuario, puntos) VALUES ($1, $2, $3)`, [interaction.guild.id, usuario, puntos]));
-            await Promise.all(insertPromises); console.log(`[EVENT CALC] ${pointsMap.size} usuarios guardados.`); await interaction.editReply({ content: `✅ ¡Cálculo completado! ${pointsMap.size} usuarios guardados.` });
+            if (pointsMap.size > 0) {
+                const insertPromises = [];
+                for (const [usuario, puntos] of pointsMap.entries()) {
+                    insertPromises.push(pool.query(`INSERT INTO puntos_evento_navidad (guild, usuario, puntos) VALUES ($1, $2, $3)`, [interaction.guild.id, usuario, puntos]));
+                }
+                await Promise.all(insertPromises);
+                console.log(`[EVENT CALC] ${pointsMap.size} usuarios guardados.`);
+                await interaction.editReply({ content: `✅ ¡Cálculo completado! ${pointsMap.size} usuarios guardados.` });
             }
             else await interaction.editReply({ content: '✅ Cálculo completado, sin puntos encontrados.' });
-        } catch (error) { console.error('[EVENT CALC] Error:', error); await interaction.editReply({ content: `❌ Error: ${error.message}` });
-        }
+        } catch (error) { console.error('[EVENT CALC] Error:', error); await interaction.editReply({ content: `❌ Error: ${error.message}` }); }
     } 
 
   } // Fin isChatInputCommand()
@@ -408,6 +480,30 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
   // --- MANEJO DEL MODAL ---
   if (interaction.isModalSubmit()) {
+    // --- MODAL: evento-temporada ---
+    if (interaction.customId === 'evento-temporada-modal') {
+        const eventoNombre = interaction.fields.getTextInputValue('evento_nombre').trim();
+        await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
+        try {
+            await pool.query(
+                `UPDATE clan_stats SET temporada_nombre = $1 WHERE guild = $2`,
+                [eventoNombre, interaction.guild.id]
+            );
+            console.log(`[TEMPORADA] ✏️ Nombre de temporada cambiado a "${eventoNombre}" por ${interaction.user.tag}`);
+
+            // Actualizar el embed del ranking inmediatamente
+            const embed = await buildRankingEmbed(interaction.guild);
+            if (rankingMessage) await rankingMessage.edit({ embeds: [embed] });
+
+            await interaction.editReply({
+                content: `✅ **¡Temporada actualizada!**\nEl ranking ahora muestra: \`TEMPORADA DE CLAN | ${eventoNombre}\``
+            });
+        } catch (err) {
+            console.error(err);
+            await interaction.editReply({ content: `❌ Error al actualizar: ${err.message}` });
+        }
+    }
+
     if (interaction.customId === 'evento-modal') {
       const comienzo = interaction.fields.getTextInputValue('comienzo');
       const termina = interaction.fields.getTextInputValue('termina');
@@ -429,8 +525,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             await announcementChannel.send({ embeds: [eventEmbed] });
             await interaction.reply({ content: '✅ ¡Anuncio publicado!', flags: [MessageFlags.Ephemeral] });
         }
-        else { await interaction.reply({ content: '❌ Canal de anuncios no encontrado.', flags: [MessageFlags.Ephemeral] });
-        }
+        else { await interaction.reply({ content: '❌ Canal de anuncios no encontrado.', flags: [MessageFlags.Ephemeral] }); }
       } catch (error) { console.error("Error enviando anuncio:", error);
       await interaction.reply({ content: '❌ Error publicando.', flags: [MessageFlags.Ephemeral] }); }
     }
@@ -438,36 +533,55 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
   // --- Lógica de Botones ---
   if (interaction.isButton()) {
-    if (interaction.customId === 'refresh_ranking') { await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
-      const embed = await buildRankingEmbed(interaction.guild); if (rankingMessage) { await rankingMessage.edit({ embeds: [embed] }); await interaction.editReply({ content: '✅ Ranking actualizado.' });
-      } else { await interaction.editReply({ content: '❌ No se pudo encontrar el mensaje.' }); } return;
+    if (interaction.customId === 'refresh_ranking') {
+      await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
+      const embed = await buildRankingEmbed(interaction.guild);
+      if (rankingMessage) { await rankingMessage.edit({ embeds: [embed] }); await interaction.editReply({ content: '✅ Ranking actualizado.' }); }
+      else { await interaction.editReply({ content: '❌ No se pudo encontrar el mensaje.' }); }
+      return;
     }
-    if (interaction.customId === 'view_full_ranking') { await interaction.deferReply({ flags: [MessageFlags.Ephemeral] }); const pageSize = 10;
-      let currentPage = 0; const totalResult = await pool.query('SELECT COUNT(*) FROM puntos WHERE guild = $1', [interaction.guild.id]);
+    if (interaction.customId === 'view_full_ranking') {
+      await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
+      const pageSize = 10; let currentPage = 0;
+      const totalResult = await pool.query('SELECT COUNT(*) FROM puntos WHERE guild = $1', [interaction.guild.id]);
       const totalRows = parseInt(totalResult.rows[0].count); const totalPages = Math.ceil(totalRows / pageSize) || 1;
-      const displayPage = async (page, interactionRef) => { const offset = page * pageSize;
-      const result = await pool.query('SELECT usuario, puntos FROM puntos WHERE guild = $1 ORDER BY puntos DESC LIMIT $2 OFFSET $3', [interactionRef.guild.id, pageSize, offset]);
-      const lines = result.rows.map((row, i) => `${offset + i + 1}. **${row.usuario}** — ${row.puntos} puntos`);
-      const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('prev_page_full').setLabel('⬅️').setStyle(ButtonStyle.Secondary).setDisabled(page === 0), new ButtonBuilder().setCustomId('next_page_full').setLabel('➡️').setStyle(ButtonStyle.Secondary).setDisabled(page >= totalPages - 1));
-      await interactionRef.editReply({ content: `🏆 **Ranking completo (Pág ${page + 1}/${totalPages}):**\n\n${lines.join('\n') || 'N/A'}`, components: [row] }); }; await displayPage(currentPage, interaction);
+      const displayPage = async (page, interactionRef) => {
+        const offset = page * pageSize;
+        const result = await pool.query('SELECT usuario, puntos FROM puntos WHERE guild = $1 ORDER BY puntos DESC LIMIT $2 OFFSET $3', [interactionRef.guild.id, pageSize, offset]);
+        const lines = result.rows.map((row, i) => `${offset + i + 1}. **${row.usuario}** — ${row.puntos} puntos`);
+        const row = new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId('prev_page_full').setLabel('⬅️').setStyle(ButtonStyle.Secondary).setDisabled(page === 0),
+          new ButtonBuilder().setCustomId('next_page_full').setLabel('➡️').setStyle(ButtonStyle.Secondary).setDisabled(page >= totalPages - 1)
+        );
+        await interactionRef.editReply({ content: `🏆 **Ranking completo (Pág ${page + 1}/${totalPages}):**\n\n${lines.join('\n') || 'N/A'}`, components: [row] });
+      };
+      await displayPage(currentPage, interaction);
       const collector = interaction.channel.createMessageComponentCollector({ filter: i => i.user.id === interaction.user.id && ['prev_page_full', 'next_page_full'].includes(i.customId), time: 60_000 });
       collector.on('collect', async i => { if (i.customId === 'prev_page_full') currentPage--; if (i.customId === 'next_page_full') currentPage++; await i.deferUpdate(); await displayPage(currentPage, interaction); });
-      collector.on('end', () => interaction.editReply({ components: [] }).catch(() => {})); return;
+      collector.on('end', () => interaction.editReply({ components: [] }).catch(() => {}));
+      return;
     }
-    if (interaction.customId === 'view_event_ranking') { await interaction.deferReply({ flags: [MessageFlags.Ephemeral] }); const pageSize = 10;
-        let currentPage = 0;
-        const totalResult = await pool.query('SELECT COUNT(*) FROM puntos_evento_navidad WHERE guild = $1', [interaction.guild.id]);
-        const totalRows = parseInt(totalResult.rows[0].count);
-        const totalPages = Math.ceil(totalRows / pageSize) || 1;
-        const displayEventPage = async (page, interactionRef) => { const offset = page * pageSize;
+    if (interaction.customId === 'view_event_ranking') {
+      await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
+      const pageSize = 10; let currentPage = 0;
+      const totalResult = await pool.query('SELECT COUNT(*) FROM puntos_evento_navidad WHERE guild = $1', [interaction.guild.id]);
+      const totalRows = parseInt(totalResult.rows[0].count); const totalPages = Math.ceil(totalRows / pageSize) || 1;
+      const displayEventPage = async (page, interactionRef) => {
+        const offset = page * pageSize;
         const result = await pool.query('SELECT usuario, puntos FROM puntos_evento_navidad WHERE guild = $1 ORDER BY puntos DESC LIMIT $2 OFFSET $3', [interactionRef.guild.id, pageSize, offset]);
         const lines = result.rows.map((row, i) => `${offset + i + 1}. **${row.usuario}** — ${row.puntos} puntos`);
-        const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('prev_page_event').setLabel('⬅️').setStyle(ButtonStyle.Secondary).setDisabled(page === 0), new ButtonBuilder().setCustomId('next_page_event').setLabel('➡️').setStyle(ButtonStyle.Secondary).setDisabled(page >= totalPages - 1));
+        const row = new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId('prev_page_event').setLabel('⬅️').setStyle(ButtonStyle.Secondary).setDisabled(page === 0),
+          new ButtonBuilder().setCustomId('next_page_event').setLabel('➡️').setStyle(ButtonStyle.Secondary).setDisabled(page >= totalPages - 1)
+        );
         await interactionRef.editReply({ content: `🎄 **Ranking Evento Navidad (Pág ${page + 1}/${totalPages}):**\n\n${lines.join('\n') || 'N/A'}`, components: [row] });
-        }; await displayEventPage(currentPage, interaction);
-        const collector = interaction.channel.createMessageComponentCollector({ filter: i => i.user.id === interaction.user.id && ['prev_page_event', 'next_page_event'].includes(i.customId), time: 60_000 });
-        collector.on('collect', async i => { if (i.customId === 'prev_page_event') currentPage--; if (i.customId === 'next_page_event') currentPage++; await i.deferUpdate(); await displayEventPage(currentPage, interaction); });
-        collector.on('end', () => interaction.editReply({ components: [] }).catch(() => {})); return; }
+      };
+      await displayEventPage(currentPage, interaction);
+      const collector = interaction.channel.createMessageComponentCollector({ filter: i => i.user.id === interaction.user.id && ['prev_page_event', 'next_page_event'].includes(i.customId), time: 60_000 });
+      collector.on('collect', async i => { if (i.customId === 'prev_page_event') currentPage--; if (i.customId === 'next_page_event') currentPage++; await i.deferUpdate(); await displayEventPage(currentPage, interaction); });
+      collector.on('end', () => interaction.editReply({ components: [] }).catch(() => {}));
+      return;
+    }
   } // Fin isButton()
 
 });
@@ -483,6 +597,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     
     await pool.query(`ALTER TABLE clan_stats ADD COLUMN IF NOT EXISTS paquetes_tienda INTEGER DEFAULT 0`);
     await pool.query(`ALTER TABLE clan_stats ADD COLUMN IF NOT EXISTS last_processed_message_id TEXT`);
+    await pool.query(`ALTER TABLE clan_stats ADD COLUMN IF NOT EXISTS temporada_nombre TEXT`);
     console.log('✅ Columnas aseguradas en clan_stats');
     
     await pool.query(`CREATE TABLE IF NOT EXISTS puntos_evento_navidad (guild TEXT, usuario TEXT, puntos INTEGER DEFAULT 0, PRIMARY KEY (guild, usuario))`);
